@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- Dashboard Views (EPIC09)                                      -->
+    <!-- Placeholder for EIS Dashboard                                 -->
+    <!-- ============================================================ -->
+
+    <!-- Chat Monitoring Action (EPIC07) -->
+    <record id="action_dke_chat_monitoring" model="ir.actions.act_window">
+        <field name="name">Chat Monitoring</field>
+        <field name="res_model">dke.chat.monitoring</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+
+    <!-- Ticket Monitoring Action (EPIC08) -->
+    <record id="action_dke_ticket_monitoring" model="ir.actions.act_window">
+        <field name="name">Ticket Monitoring</field>
+        <field name="res_model">dke.ticket.monitoring</field>
+        <field name="view_mode">tree,form</field>
+    </record>
+
+    <!-- TODO: Add graph/pivot views for EIS Dashboard (EPIC09 - PBI-26..29) -->
+    <!-- TODO: Add calendar views for scheduled messages -->
+
+</odoo>

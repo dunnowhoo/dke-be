@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- ============================================================ -->
+    <!-- Module Category                                               -->
+    <!-- ============================================================ -->
+    <record id="module_category_dke_crm" model="ir.module.category">
+        <field name="name">DKE Smart Sales</field>
+        <field name="description">DKE Smart Sales Platform - AI-Powered CRM</field>
+        <field name="sequence">10</field>
+    </record>
+
+    <!-- ============================================================ -->
+    <!-- Security Groups                                               -->
+    <!-- ============================================================ -->
+
+    <!-- Customer Care Group -->
+    <record id="group_customer_care" model="res.groups">
+        <field name="name">Customer Care</field>
+        <field name="category_id" ref="module_category_dke_crm"/>
+        <field name="comment">
+            Customer Care staff who handle customer chats and create support tickets.
+        </field>
+    </record>
+
+    <!-- Sales Staff Group -->
+    <record id="group_sales_staff" model="res.groups">
+        <field name="name">Sales Staff</field>
+        <field name="category_id" ref="module_category_dke_crm"/>
+        <field name="implied_ids" eval="[(4, ref('group_customer_care'))]"/>
+        <field name="comment">
+            Sales staff who manage campaigns, follow-ups, and invoicing.
+        </field>
+    </record>
+
+    <!-- Expert Staff Group -->
+    <record id="group_expert_staff" model="res.groups">
+        <field name="name">Expert Staff</field>
+        <field name="category_id" ref="module_category_dke_crm"/>
+        <field name="comment">
+            Expert staff who resolve escalated support tickets.
+        </field>
+    </record>
+
+    <!-- Sales Manager Group -->
+    <record id="group_sales_manager" model="res.groups">
+        <field name="name">Sales Manager</field>
+        <field name="category_id" ref="module_category_dke_crm"/>
+        <field name="implied_ids" eval="[(4, ref('group_sales_staff'))]"/>
+        <field name="comment">
+            Sales managers who monitor performance, approve campaigns, and access EIS dashboards.
+        </field>
+    </record>
+
+</odoo>

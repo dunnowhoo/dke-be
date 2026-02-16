@@ -1,0 +1,67 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+*.whl
+
+# =========================
+# Virtual Environment
+# =========================
+venv/
+env/
+.env
+.venv/
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# =========================
+# Odoo Specific
+# =========================
+*.pyc
+*.pyo
+*.log
+filestore/
+sessions/
+addons/
+
+# =========================
+# Docker
+# =========================
+docker-data/
+pgdata/
+
+# =========================
+# Misc
+# =========================
+*.bak
+*.tmp
+*.temp
+.coverage
+htmlcov/
+.pytest_cache/
+node_modules/

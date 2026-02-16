@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- Cron Jobs                                                     -->
+    <!-- ============================================================ -->
+
+    <!-- Cron: Sync marketplace chat messages (every 5 minutes) -->
+    <record id="ir_cron_sync_marketplace_chat" model="ir.cron">
+        <field name="name">DKE: Sync Marketplace Chat Messages</field>
+        <field name="model_id" ref="model_dke_marketplace_integration"/>
+        <field name="interval_number">5</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="False"/>
+        <!-- TODO: Set code field to call sync method -->
+    </record>
+
+    <!-- Cron: Auto follow-up messages (daily at 10:00 WIB) -->
+    <record id="ir_cron_auto_followup" model="ir.cron">
+        <field name="name">DKE: Auto Follow-Up Messages</field>
+        <field name="model_id" ref="model_dke_scheduled_message"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="False"/>
+        <!-- TODO: Set code field to call auto-followup method -->
+    </record>
+
+    <!-- Cron: Process scheduled messages (every minute) -->
+    <record id="ir_cron_process_scheduled_messages" model="ir.cron">
+        <field name="name">DKE: Process Scheduled Messages</field>
+        <field name="model_id" ref="model_dke_scheduled_message"/>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="False"/>
+        <!-- TODO: Set code field to process pending scheduled messages -->
+    </record>
+
+    <!-- Cron: Sync marketplace transactions (every 30 minutes) -->
+    <record id="ir_cron_sync_transactions" model="ir.cron">
+        <field name="name">DKE: Sync Marketplace Transactions</field>
+        <field name="model_id" ref="model_dke_sale_transaction"/>
+        <field name="interval_number">30</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="False"/>
+        <!-- TODO: Set code field to call transaction sync method -->
+    </record>
+
+    <!-- Cron: Check overdue tickets -->
+    <record id="ir_cron_check_overdue_tickets" model="ir.cron">
+        <field name="name">DKE: Check Overdue Support Tickets</field>
+        <field name="model_id" ref="model_dke_support_ticket"/>
+        <field name="interval_number">15</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="False"/>
+        <!-- TODO: Set code field to check and flag overdue tickets -->
+    </record>
+
+</odoo>
