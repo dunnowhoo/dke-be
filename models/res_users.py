@@ -14,6 +14,19 @@ class ResUsers(models.Model):
         ('expert_staff', 'Expert Staff'),
     ], string='DKE Role')
 
+    dke_status = fields.Selection([
+        ('active', 'Active'),
+        ('inactive', 'Inactive'),
+    ], string='DKE Status', default='active')
+
+    dke_specialization = fields.Selection([
+        ('teknis', 'Teknis'),
+        ('produk', 'Produk'),
+        ('pengiriman', 'Pengiriman'),
+    ], string='Specialization')
+
+    dke_phone = fields.Char(string='DKE Phone')
+
     # Performance stats (computed — to be implemented)
     avg_response_time = fields.Float(string='Avg Response Time (min)')
     avg_rating = fields.Float(string='Avg Customer Rating')
