@@ -131,3 +131,5 @@ main ← staging ← development ← feat/PBI-*
 ```
 
 Setiap orang kerja di branch `feat/PBI-*` masing-masing, lalu buat PR ke `development`. Detail lengkap ada di [CONTRIBUTING.md](./CONTRIBUTING.md).
+
+> Note: Initial change by Azmi on branch `feat/PBI-azmi` for initial push.
