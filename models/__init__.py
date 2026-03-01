@@ -2,6 +2,7 @@
 
 from . import chat_room
 from . import chat_message
+from . import chat_session
 from . import marketplace_integration
 from . import scheduled_message
 from . import marketing_campaign
