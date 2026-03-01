@@ -42,6 +42,19 @@ class ChatRoom(models.Model):
     # Counters
     unread_count = fields.Integer(string='Unread Count', default=0)
 
+    # Claim / Assignment (PBI-7, PBI-9)
+    is_assigned = fields.Boolean(
+        string='Is Assigned',
+        default=False,
+        help='True jika chat sudah diklaim oleh Customer Care.',
+    )
+    assigned_to = fields.Many2one(
+        'res.users',
+        string='Assigned To',
+        help='Customer Care yang sedang menangani chat ini.',
+    )
+    assigned_at = fields.Datetime(string='Assigned At')
+
     # Relations
     message_ids = fields.One2many('dke.chat.message', 'room_id', string='Messages')
     ticket_ids = fields.One2many('dke.support.ticket', 'room_id', string='Support Tickets')

@@ -25,3 +25,5 @@ access_chat_monitoring_manager,dke.chat.monitoring.manager,model_dke_chat_monito
 access_chat_monitoring_care,dke.chat.monitoring.care,model_dke_chat_monitoring,group_customer_care,1,0,0,0
 access_ticket_monitoring_manager,dke.ticket.monitoring.manager,model_dke_ticket_monitoring,group_sales_manager,1,1,1,1
 access_ticket_monitoring_expert,dke.ticket.monitoring.expert,model_dke_ticket_monitoring,group_expert_staff,1,0,0,0
+access_whatsapp_config_manager,dke.whatsapp.config.manager,model_dke_whatsapp_config,group_sales_manager,1,1,1,1
+access_whatsapp_config_care,dke.whatsapp.config.care,model_dke_whatsapp_config,group_customer_care,1,0,0,0
