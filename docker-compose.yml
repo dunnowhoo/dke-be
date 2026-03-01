@@ -32,6 +32,7 @@ services:
       - "8072:8072"
     volumes:
       - ./:/mnt/extra-addons/dke_crm
+      - ../odoo/addons:/mnt/enterprise-addons
       - odoo-data:/var/lib/odoo
       - ./odoo.conf:/etc/odoo/odoo.conf
     environment:

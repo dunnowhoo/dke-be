@@ -35,6 +35,7 @@ Key Features:
 
         # Data
         'data/dke_crm_data.xml',
+        'data/dke_crm_demo_users.xml',
 
         # Views
         'views/chat_room_views.xml',
