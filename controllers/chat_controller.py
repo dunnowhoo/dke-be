@@ -319,6 +319,111 @@ class ChatController(http.Controller):
             )
 
     # ──────────────────────────────────────────────────────────────
+    # PBI-9: List available (unclaimed) chat rooms
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/chats/available', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def get_available_chats(self, **kwargs):
+        """GET /api/chats/available — List unassigned chat rooms.
+
+        EPIC02 - PBI-9: Returns active rooms where is_assigned == False,
+        sorted by last_message_time desc. Used by customer_care to pick
+        up new incoming conversations.
+
+        Query Params:
+          - page   : int (default 1)
+          - limit  : int (default 20)
+          - search : string (optional)
+        """
+        try:
+            page = max(int(kwargs.get('page', 1)), 1)
+            limit = min(int(kwargs.get('limit', 20)), 100)
+            search = (kwargs.get('search') or '').strip()
+
+            domain = [
+                ('is_assigned', '=', False),
+                ('state', '=', 'active'),
+            ]
+            if search:
+                domain += [
+                    '|',
+                    ('customer_name', 'ilike', search),
+                    ('external_conversation_id', 'ilike', search),
+                ]
+
+            Room = request.env['dke.chat.room'].sudo()
+            total = Room.search_count(domain)
+            rooms = Room.search(
+                domain,
+                limit=limit,
+                offset=(page - 1) * limit,
+                order='last_message_time desc',
+            )
+
+            return request.make_json_response({
+                'status': 'success',
+                'meta': {
+                    'total': total,
+                    'page': page,
+                    'limit': limit,
+                    'pages': -(-total // limit),
+                },
+                'data': [self._room_to_dict(r) for r in rooms],
+            })
+        except Exception as e:
+            _logger.error("get_available_chats error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # PBI-9: Claim (take over) a chat room
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/chats/<int:room_id>/claim', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
+    def claim_chat(self, room_id, **kwargs):
+        """POST /api/chats/{room_id}/claim — Claim an unassigned chat room.
+
+        EPIC02 - PBI-9: Sets is_assigned=True, assigned_to=current user,
+        assigned_at=now. Returns 409 if room is already claimed.
+        """
+        try:
+            room = request.env['dke.chat.room'].sudo().browse(room_id)
+            if not room.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'},
+                    status=404,
+                )
+
+            if room.is_assigned:
+                return request.make_json_response(
+                    {
+                        'status': 'error',
+                        'message': 'Chat sudah diambil oleh %s.' % (
+                            room.assigned_to.name if room.assigned_to else 'agen lain'
+                        ),
+                    },
+                    status=409,
+                )
+
+            room.write({
+                'is_assigned': True,
+                'assigned_to': request.env.user.id,
+                'assigned_at': fields.Datetime.now(),
+            })
+
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Chat berhasil diambil.',
+                'data': self._room_to_dict(room),
+            })
+        except Exception as e:
+            _logger.error("claim_chat error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
     # Extra: Single room detail
     # ──────────────────────────────────────────────────────────────
 

@@ -27,6 +27,7 @@ Key Features:
         'mail',
         'sale',
         'contacts',
+        'whatsapp',
     ],
     'data': [
         # Security
