@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    DKE Smart Sales Platform — Demo / Seed Users
+    ==============================================
+    Creates one dummy user per role for development & testing.
+    All passwords are set to the plain-text value shown in the
+    <field name="password"> tag; Odoo hashes them on write.
+
+    !! Remove or gate this file behind `demo` key before going to production !!
+-->
+<odoo>
+    <data noupdate="1">
+
+        <!-- ======================================================== -->
+        <!-- 1. Admin (uses Odoo's built-in admin user — just update)  -->
+        <!-- ======================================================== -->
+        <!-- The default "admin" user (id=2) is already created by Odoo.
+             We only ensure the DKE fields are populated. -->
+        <record id="base.user_admin" model="res.users">
+            <field name="dke_status">active</field>
+            <field name="dke_phone">08100000000</field>
+        </record>
+
+        <!-- ======================================================== -->
+        <!-- 2. Sales Manager                                          -->
+        <!-- ======================================================== -->
+        <record id="dke_user_sales_manager" model="res.users">
+            <field name="name">Sales Manager Demo</field>
+            <field name="login">sales_manager@dke.local</field>
+            <field name="email">sales_manager@dke.local</field>
+            <field name="password">admin</field>
+            <field name="dke_role">sales_manager</field>
+            <field name="dke_status">active</field>
+            <field name="dke_phone">08111111111</field>
+            <field name="groups_id" eval="[(6, 0, [
+                ref('base.group_user'),
+                ref('dke_crm.group_sales_manager'),
+            ])]"/>
+        </record>
+
+        <!-- ======================================================== -->
+        <!-- 3. Sales Staff                                            -->
+        <!-- ======================================================== -->
+        <record id="dke_user_sales_staff" model="res.users">
+            <field name="name">Sales Staff Demo</field>
+            <field name="login">sales_staff@dke.local</field>
+            <field name="email">sales_staff@dke.local</field>
+            <field name="password">admin</field>
+            <field name="dke_role">sales_staff</field>
+            <field name="dke_status">active</field>
+            <field name="dke_phone">08122222222</field>
+            <field name="groups_id" eval="[(6, 0, [
+                ref('base.group_user'),
+                ref('dke_crm.group_sales_staff'),
+            ])]"/>
+        </record>
+
+        <!-- ======================================================== -->
+        <!-- 4. Expert Staff                                           -->
+        <!-- ======================================================== -->
+        <record id="dke_user_expert_staff" model="res.users">
+            <field name="name">Expert Staff Demo</field>
+            <field name="login">expert_staff@dke.local</field>
+            <field name="email">expert_staff@dke.local</field>
+            <field name="password">admin</field>
+            <field name="dke_role">expert_staff</field>
+            <field name="dke_status">active</field>
+            <field name="dke_phone">08133333333</field>
+            <field name="dke_specialization">teknis</field>
+            <field name="groups_id" eval="[(6, 0, [
+                ref('base.group_user'),
+                ref('dke_crm.group_expert_staff'),
+            ])]"/>
+        </record>
+
+        <!-- ======================================================== -->
+        <!-- 5. Customer Care                                          -->
+        <!-- ======================================================== -->
+        <record id="dke_user_customer_care" model="res.users">
+            <field name="name">Customer Care Demo</field>
+            <field name="login">customer_care@dke.local</field>
+            <field name="email">customer_care@dke.local</field>
+            <field name="password">admin</field>
+            <field name="dke_role">customer_care</field>
+            <field name="dke_status">active</field>
+            <field name="dke_phone">08144444444</field>
+            <field name="groups_id" eval="[(6, 0, [
+                ref('base.group_user'),
+                ref('dke_crm.group_customer_care'),
+            ])]"/>
+        </record>
+
+    </data>
+</odoo>
