@@ -27,3 +27,11 @@ access_ticket_monitoring_manager,dke.ticket.monitoring.manager,model_dke_ticket_
 access_ticket_monitoring_expert,dke.ticket.monitoring.expert,model_dke_ticket_monitoring,group_expert_staff,1,0,0,0
 access_whatsapp_config_manager,dke.whatsapp.config.manager,model_dke_whatsapp_config,group_sales_manager,1,1,1,1
 access_whatsapp_config_care,dke.whatsapp.config.care,model_dke_whatsapp_config,group_customer_care,1,0,0,0
+access_shopee_config_manager,shopee.config.manager,model_shopee_config,group_sales_manager,1,1,1,1
+access_shopee_config_staff,shopee.config.staff,model_shopee_config,group_sales_staff,1,0,0,0
+access_shopee_order_manager,shopee.order.manager,model_shopee_order,group_sales_manager,1,1,1,1
+access_shopee_order_staff,shopee.order.staff,model_shopee_order,group_sales_staff,1,0,0,0
+access_shopee_order_item_manager,shopee.order.item.manager,model_shopee_order_item,group_sales_manager,1,1,1,1
+access_shopee_order_item_staff,shopee.order.item.staff,model_shopee_order_item,group_sales_staff,1,0,0,0
+access_shopee_order_escrow_manager,shopee.order.escrow.manager,model_shopee_order_escrow,group_sales_manager,1,1,1,1
+access_shopee_order_escrow_staff,shopee.order.escrow.staff,model_shopee_order_escrow,group_sales_staff,1,0,0,0
