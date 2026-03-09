@@ -13,3 +13,4 @@ from . import chat_monitoring
 from . import ticket_monitoring
 from . import res_partner
 from . import res_users
+from . import shopee_integration
