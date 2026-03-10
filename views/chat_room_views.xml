@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- Chat Room Views                                               -->
+    <!-- ============================================================ -->
+
+    <!-- Chat Room Tree View -->
+    <record id="dke_chat_room_view_tree" model="ir.ui.view">
+        <field name="name">dke.chat.room.tree</field>
+        <field name="model">dke.chat.room</field>
+        <field name="arch" type="xml">
+            <tree string="Chat Rooms">
+                <field name="name"/>
+                <field name="customer_name"/>
+                <field name="source"/>
+                <field name="state"/>
+                <field name="unread_count"/>
+                <field name="last_message_time"/>
+                <field name="assigned_care_id"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Chat Room Form View -->
+    <record id="dke_chat_room_view_form" model="ir.ui.view">
+        <field name="name">dke.chat.room.form</field>
+        <field name="model">dke.chat.room</field>
+        <field name="arch" type="xml">
+            <form string="Chat Room">
+                <header>
+                    <field name="state" widget="statusbar" statusbar_visible="active,done,archived"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="name"/>
+                            <field name="customer_name"/>
+                            <field name="customer_id"/>
+                            <field name="assigned_care_id"/>
+                        </group>
+                        <group>
+                            <field name="source"/>
+                            <field name="external_conversation_id"/>
+                            <field name="unread_count"/>
+                            <field name="last_message_time"/>
+                            <field name="last_sync_time"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Messages">
+                            <field name="message_ids"/>
+                        </page>
+                        <page string="Scheduled Messages">
+                            <field name="scheduled_message_ids"/>
+                        </page>
+                        <page string="Support Tickets">
+                            <field name="ticket_ids"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Chat Room Search View -->
+    <record id="dke_chat_room_view_search" model="ir.ui.view">
+        <field name="name">dke.chat.room.search</field>
+        <field name="model">dke.chat.room</field>
+        <field name="arch" type="xml">
+            <search string="Search Chat Rooms">
+                <field name="name"/>
+                <field name="customer_name"/>
+                <field name="assigned_care_id"/>
+                <filter name="active" string="Active" domain="[('state', '=', 'active')]"/>
+                <filter name="done" string="Done" domain="[('state', '=', 'done')]"/>
+                <group string="Group By">
+                    <filter name="group_source" string="Source" context="{'group_by': 'source'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_care" string="Customer Care" context="{'group_by': 'assigned_care_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Chat Room Action -->
+    <record id="action_dke_chat_room" model="ir.actions.act_window">
+        <field name="name">Chat Rooms</field>
+        <field name="res_model">dke.chat.room</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="dke_chat_room_view_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No chat rooms found
+            </p>
+            <p>
+                Chat rooms are created automatically when marketplace messages are synced.
+            </p>
+        </field>
+    </record>
+
+</odoo>

@@ -30,6 +30,8 @@ class ResUsers(models.Model):
 
     # Performance stats (computed — to be implemented)
     avg_response_time = fields.Float(string='Avg Response Time (min)')
+    avg_resolution_time = fields.Float(string='Avg Resolution Time (hours)')
     avg_rating = fields.Float(string='Avg Customer Rating')
     total_chats_handled = fields.Integer(string='Total Chats Handled')
     total_tickets_resolved = fields.Integer(string='Total Tickets Resolved')
+    total_messages_sent = fields.Integer(string='Total Messages Sent')

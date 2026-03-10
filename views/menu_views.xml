@@ -26,6 +26,20 @@
               sequence="10"/>
 
     <!-- ============================================================ -->
+    <!-- Chat Menu (from PBI-fauzan)                                   -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_chat"
+              name="Chat"
+              parent="menu_dke_crm_root"
+              sequence="15"/>
+
+    <menuitem id="menu_dke_chat_rooms"
+              name="Chat Rooms"
+              parent="menu_dke_chat"
+              action="action_dke_chat_room"
+              sequence="10"/>
+
+    <!-- ============================================================ -->
     <!-- Marketing Menu (EPIC03)                                       -->
     <!-- ============================================================ -->
     <menuitem id="menu_dke_marketing"

@@ -134,9 +134,11 @@ class TicketingController(http.Controller):
                     'specialization': user.dke_specialization or '',
                     'avatar_url': '/web/image/res.users/%d/avatar_128' % user.id,
                     'avg_response_time': user.avg_response_time or 0,
+                    'avg_resolution_time': user.avg_resolution_time or 0.0,
                     'avg_rating': user.avg_rating or 0,
                     'total_chats_handled': user.total_chats_handled or 0,
                     'total_tickets_resolved': user.total_tickets_resolved or 0,
+                    'total_messages_sent': user.total_messages_sent or 0,
                 },
             })
         except Exception as e:
@@ -293,6 +295,9 @@ class TicketingController(http.Controller):
                     'is_assigned': True,
                     'assigned_at': now,
                 })
+            
+            # Increment total_messages_sent for the user
+            user.sudo().write({'total_messages_sent': (user.total_messages_sent or 0) + 1})
 
             return request.make_json_response({
                 'status': 'success',
@@ -426,6 +431,9 @@ class TicketingController(http.Controller):
                     'send_status': 'sent',
                     'created_at': now,
                 })
+                # Increment total_messages_sent for the user
+                user.sudo().write({'total_messages_sent': (user.total_messages_sent or 0) + 1})
+
 
             return request.make_json_response({
                 'status': 'success',
@@ -778,8 +786,8 @@ class TicketingController(http.Controller):
                 return request.make_json_response(
                     {'status': 'error', 'message': 'content wajib diisi.'}, status=400
                 )
-
             user = request.env.user
+
             msg = request.env['dke.support.ticket.message'].sudo().create({
                 'ticket_id': ticket_id,
                 'sender_id': user.id,
@@ -789,6 +797,9 @@ class TicketingController(http.Controller):
             # Record first response time
             if not ticket.first_response_at:
                 ticket.write({'first_response_at': fields.Datetime.now()})
+
+            if user.dke_role == 'expert_staff':
+                user.sudo().write({'total_messages_sent': (user.total_messages_sent or 0) + 1})
 
             return request.make_json_response({
                 'status': 'success',
@@ -821,6 +832,20 @@ class TicketingController(http.Controller):
                 'resolved_at': fields.Datetime.now(),
             })
 
+            # --- Calculate Resolution Velocity ---
+            expert = ticket.assigned_expert_id
+            if expert:
+                diff = fields.Datetime.now() - ticket.create_date
+                hours_taken = diff.total_seconds() / 3600.0
+                current_total = expert.total_tickets_resolved or 0
+                current_avg = expert.avg_resolution_time or 0.0
+                new_total = current_total + 1
+                new_avg = ((current_avg * current_total) + hours_taken) / new_total
+                expert.sudo().write({
+                    'total_tickets_resolved': new_total,
+                    'avg_resolution_time': new_avg,
+                })
+
             return request.make_json_response({
                 'status': 'success',
                 'message': 'Tiket berhasil di-resolve.',
@@ -828,6 +853,77 @@ class TicketingController(http.Controller):
             })
         except Exception as e:
             _logger.error("resolve_ticket error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    @http.route('/api/tickets/<int:ticket_id>/update', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
+    def update_ticket(self, ticket_id, **post):
+        """POST /api/tickets/{ticket_id}/update — Update ticket subject, desc, or priority."""
+        try:
+            if not request.httprequest.data:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Missing JSON payload.'}, status=400
+                )
+            
+            payload = json.loads(request.httprequest.data.decode('utf-8'))
+            ticket = request.env['dke.support.ticket'].sudo().browse(ticket_id)
+            if not ticket.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Ticket tidak ditemukan.'}, status=404
+                )
+
+            # Only customer_care or admin/manager allowed
+            user = request.env.user
+            if user.dke_role not in ('customer_care', 'sales_manager', 'admin'):
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya Customer Care yang dapat mengubah tiket.'}, status=403
+                )
+
+            vals = {}
+            if 'subject' in payload:
+                vals['subject'] = payload['subject']
+            if 'description' in payload:
+                vals['description'] = payload['description']
+            if 'priority' in payload:
+                vals['priority'] = payload['priority']
+
+            ticket.write(vals)
+
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Tiket berhasil diupdate.',
+                'data': self._ticket_to_dict(ticket),
+            })
+        except Exception as e:
+            _logger.error("update_ticket error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    @http.route('/api/tickets/<int:ticket_id>/delete', type='http', auth='user', methods=['DELETE', 'POST'], csrf=False, cors='*')
+    def delete_ticket(self, ticket_id, **kwargs):
+        """DELETE /api/tickets/{ticket_id}/delete — Delete a ticket."""
+        try:
+            ticket = request.env['dke.support.ticket'].sudo().browse(ticket_id)
+            if not ticket.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Ticket tidak ditemukan.'}, status=404
+                )
+
+            user = request.env.user
+            if user.dke_role not in ('customer_care', 'sales_manager', 'admin'):
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya Customer Care yang dapat menghapus tiket.'}, status=403
+                )
+
+            ticket.unlink()
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Tiket berhasil dihapus.',
+            })
+        except Exception as e:
+            _logger.error("delete_ticket error: %s", e, exc_info=True)
             return request.make_json_response(
                 {'status': 'error', 'message': str(e)}, status=500
             )
@@ -916,7 +1012,9 @@ class TicketingController(http.Controller):
                     'specialization': e.dke_specialization or '',
                     'specialization_label': self.SPECIALIZATION_LABELS.get(e.dke_specialization or '', ''),
                     'avg_rating': e.avg_rating or 0,
+                    'avg_resolution_time': e.avg_resolution_time or 0.0,
                     'total_tickets_resolved': e.total_tickets_resolved or 0,
+                    'total_messages_sent': e.total_messages_sent or 0,
                 } for e in experts],
             })
         except Exception as e:
