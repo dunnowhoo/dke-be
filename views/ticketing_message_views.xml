@@ -2,9 +2,9 @@
 <odoo>
 
     <!-- Chat Message Tree View -->
-    <record id="dke_chat_message_view_tree" model="ir.ui.view">
-        <field name="name">dke.chat.message.tree</field>
-        <field name="model">dke.chat.message</field>
+    <record id="dke_ticketing_message_view_tree" model="ir.ui.view">
+        <field name="name">dke.ticketing.message.tree</field>
+        <field name="model">dke.ticketing.message</field>
         <field name="arch" type="xml">
             <tree string="Chat Messages">
                 <field name="room_id"/>
@@ -19,9 +19,9 @@
     </record>
 
     <!-- Chat Message Form View -->
-    <record id="dke_chat_message_view_form" model="ir.ui.view">
-        <field name="name">dke.chat.message.form</field>
-        <field name="model">dke.chat.message</field>
+    <record id="dke_ticketing_message_view_form" model="ir.ui.view">
+        <field name="name">dke.ticketing.message.form</field>
+        <field name="model">dke.ticketing.message</field>
         <field name="arch" type="xml">
             <form string="Chat Message">
                 <sheet>

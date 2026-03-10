@@ -6,10 +6,10 @@
     <!-- Placeholder for EIS Dashboard                                 -->
     <!-- ============================================================ -->
 
-    <!-- Chat Monitoring Action (EPIC07) -->
-    <record id="action_dke_chat_monitoring" model="ir.actions.act_window">
-        <field name="name">Chat Monitoring</field>
-        <field name="res_model">dke.chat.monitoring</field>
+    <!-- Ticketing Monitoring Action (EPIC07) -->
+    <record id="action_dke_support_ticketing_monitoring" model="ir.actions.act_window">
+        <field name="name">Ticketing Monitoring</field>
+        <field name="res_model">dke.support.ticketing.monitoring</field>
         <field name="view_mode">tree,form</field>
     </record>
 

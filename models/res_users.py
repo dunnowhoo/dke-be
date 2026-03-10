@@ -20,9 +20,10 @@ class ResUsers(models.Model):
     ], string='DKE Status', default='active')
 
     dke_specialization = fields.Selection([
-        ('teknis', 'Teknis'),
-        ('produk', 'Produk'),
-        ('pengiriman', 'Pengiriman'),
+        ('face_wash', 'Face Wash'),
+        ('serum', 'Serum'),
+        ('lotion', 'Lotion'),
+        ('toner', 'Toner'),
     ], string='Specialization')
 
     dke_phone = fields.Char(string='DKE Phone')

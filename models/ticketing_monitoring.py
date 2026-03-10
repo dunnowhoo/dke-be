@@ -9,10 +9,10 @@ class ChatMonitoring(models.Model):
     EPIC07 - PBI-22, PBI-23
     """
     _name = 'dke.chat.monitoring'
-    _description = 'Chat Monitoring'
+    _description = 'Ticketing Monitoring'
     _order = 'record_date desc'
 
-    room_id = fields.Many2one('dke.chat.room', string='Chat Room', required=True)
+    room_id = fields.Many2one('dke.ticketing.room', string='Chat Room', required=True)
     care_user_id = fields.Many2one('res.users', string='Customer Care')
     customer_id = fields.Many2one('res.partner', string='Customer')
 

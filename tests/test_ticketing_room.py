@@ -3,8 +3,8 @@
 from odoo.tests.common import TransactionCase
 
 
-class TestChatRoom(TransactionCase):
-    """Test cases for dke.chat.room model.
+class TestTicketingRoom(TransactionCase):
+    """Test cases for dke.ticketing.room model.
 
     EPIC01 - PBI-1, PBI-2, PBI-6
     """
@@ -12,11 +12,11 @@ class TestChatRoom(TransactionCase):
     def setUp(self):
         super().setUp()
         # TODO: Create test data
-        self.ChatRoom = self.env['dke.chat.room']
+        self.TicketingRoom = self.env['dke.ticketing.room']
 
-    def test_create_chat_room(self):
+    def test_create_ticketing_room(self):
         """Test creating a basic chat room."""
-        room = self.ChatRoom.create({
+        room = self.TicketingRoom.create({
             'name': 'Test Chat Room',
             'customer_name': 'Test Customer',
             'source': 'shopee',
@@ -24,12 +24,12 @@ class TestChatRoom(TransactionCase):
         self.assertEqual(room.state, 'active')
         self.assertEqual(room.unread_count, 0)
 
-    def test_chat_room_state_transitions(self):
+    def test_ticketing_room_state_transitions(self):
         """Test chat room can transition between states."""
         # TODO: Implement state transition tests
         pass
 
-    def test_chat_room_message_count(self):
+    def test_ticketing_room_message_count(self):
         """Test message counting on chat room."""
         # TODO: Implement message counting tests
         pass

@@ -3,7 +3,7 @@
 from odoo import models, fields, api
 
 
-class ChatRoom(models.Model):
+class TicketingRoom(models.Model):
     """Chat room / conversation thread.
 
     Represents a conversation between Customer Care and a customer,
@@ -11,7 +11,7 @@ class ChatRoom(models.Model):
 
     EPIC01 - PBI-1, PBI-2, PBI-6
     """
-    _name = 'dke.chat.room'
+    _name = 'dke.ticketing.room'
     _description = 'Chat Room'
     _order = 'last_message_time desc'
 
@@ -22,7 +22,6 @@ class ChatRoom(models.Model):
         string='Customer Initial', compute='_compute_initial', store=True
     )
     customer_id = fields.Many2one('res.partner', string='Customer')
-    assigned_care_id = fields.Many2one('res.users', string='Assigned Customer Care')
 
     # Source / Channel
     source = fields.Selection([
@@ -60,8 +59,8 @@ class ChatRoom(models.Model):
     assigned_at = fields.Datetime(string='Assigned At')
 
     # Relations
-    message_ids = fields.One2many('dke.chat.message', 'room_id', string='Messages')
-    session_ids = fields.One2many('dke.chat.session', 'room_id', string='Sessions')
+    message_ids = fields.One2many('dke.ticketing.message', 'room_id', string='Messages')
+    session_ids = fields.One2many('dke.ticketing.session', 'room_id', string='Sessions')
     ticket_ids = fields.One2many('dke.support.ticket', 'room_id', string='Support Tickets')
     scheduled_message_ids = fields.One2many(
         'dke.scheduled.message', 'room_id', string='Scheduled Messages'
@@ -86,8 +85,8 @@ class ChatRoom(models.Model):
         self.ensure_one()
         active_session = self.get_active_session()
         assigned_name = ''
-        if self.assigned_care_id:
-            assigned_name = self.assigned_care_id.name or ''
+        if self.assigned_to:
+            assigned_name = self.assigned_to.name or ''
 
         return {
             'id': self.id,
@@ -98,7 +97,7 @@ class ChatRoom(models.Model):
             'platform': self.source or 'platform',
             'state': self.state,
             'assigned_cs': assigned_name,
-            'assigned_cs_id': self.assigned_care_id.id if self.assigned_care_id else None,
+            'assigned_cs_id': self.assigned_to.id if self.assigned_to else None,
             'last_message_time': self.last_message_time.isoformat() if self.last_message_time else None,
             'unread_count': self.unread_count,
             'session_id': active_session.id if active_session else None,

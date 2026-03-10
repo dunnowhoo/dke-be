@@ -132,8 +132,8 @@ class IntegrationController(http.Controller):
         EPIC02 - PBI-7 business rules:
         - Deduplicate by WhatsApp message_id.
         - Find or create res.partner by phone.
-        - Find or create dke.chat.room (per phone, source=whatsapp).
-        - Create dke.chat.message.
+        - Find or create dke.ticketing.room (per phone, source=whatsapp).
+        - Create dke.ticketing.message.
         - Update dke.whatsapp.config.last_sync_time.
         """
         wa_message_id = msg.get('id', '')
@@ -145,7 +145,7 @@ class IntegrationController(http.Controller):
             return
 
         # ── 1. Deduplicate ──────────────────────────────────────
-        already_exists = request.env['dke.chat.message'].sudo().search_count([
+        already_exists = request.env['dke.ticketing.message'].sudo().search_count([
             ('external_message_id', '=', wa_message_id)
         ])
         if already_exists:
@@ -168,7 +168,7 @@ class IntegrationController(http.Controller):
         else:
             content = f'[{msg_type}]'
 
-        # Normalise to dke.chat.message.message_type selection values
+        # Normalise to dke.ticketing.message.message_type selection values
         if msg_type not in ('text', 'image'):
             stored_type = 'file'
         else:
@@ -191,13 +191,13 @@ class IntegrationController(http.Controller):
                 'phone': phone,
             })
 
-        # ── 5. Find or create dke.chat.room ────────────────────
-        chat_room = request.env['dke.chat.room'].sudo().search([
+        # ── 5. Find or create dke.ticketing.room ────────────────────
+        ticketing_room = request.env['dke.ticketing.room'].sudo().search([
             ('external_conversation_id', '=', phone),
             ('source', '=', 'whatsapp'),
         ], limit=1)
-        if not chat_room:
-            chat_room = request.env['dke.chat.room'].sudo().create({
+        if not ticketing_room:
+            ticketing_room = request.env['dke.ticketing.room'].sudo().create({
                 'name': f'WA: {customer_name} ({phone})',
                 'customer_name': customer_name,
                 'customer_id': partner.id,
@@ -208,8 +208,8 @@ class IntegrationController(http.Controller):
             })
         else:
             # Update name if it was previously just the phone number
-            if chat_room.customer_name == phone and customer_name != phone:
-                chat_room.sudo().write({'customer_name': customer_name})
+            if ticketing_room.customer_name == phone and customer_name != phone:
+                ticketing_room.sudo().write({'customer_name': customer_name})
 
         # ── 6. Parse timestamp ──────────────────────────────────
         try:
@@ -217,9 +217,9 @@ class IntegrationController(http.Controller):
         except (ValueError, TypeError):
             msg_time = fields.Datetime.now()
 
-        # ── 7. Create dke.chat.message ──────────────────────────
-        request.env['dke.chat.message'].sudo().create({
-            'room_id': chat_room.id,
+        # ── 7. Create dke.ticketing.message ──────────────────────────
+        request.env['dke.ticketing.message'].sudo().create({
+            'room_id': ticketing_room.id,
             'external_message_id': wa_message_id,
             'sender_type': 'customer',
             'content_text': content,
@@ -228,8 +228,8 @@ class IntegrationController(http.Controller):
             'created_at': msg_time,
         })
 
-        # ── 8. Update chat_room last_message_time ───────────────
-        chat_room.sudo().write({'last_message_time': msg_time})
+        # ── 8. Update ticketing_room last_message_time ───────────────
+        ticketing_room.sudo().write({'last_message_time': msg_time})
 
         # ── 9. Update last_sync_time on config ──────────────────
         config = request.env['dke.whatsapp.config'].sudo().get_active_config()
@@ -238,7 +238,7 @@ class IntegrationController(http.Controller):
 
         _logger.info(
             "WhatsApp: saved message %s from %s (room=%s)",
-            wa_message_id, phone, chat_room.id,
+            wa_message_id, phone, ticketing_room.id,
         )
 
     # ── Config Endpoints ────────────────────────────────────────

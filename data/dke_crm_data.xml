@@ -4,9 +4,9 @@
     <!-- ============================================================ -->
     <!-- Sequences                                                     -->
     <!-- ============================================================ -->
-    <record id="seq_chat_session" model="ir.sequence">
+    <record id="seq_ticketing_session" model="ir.sequence">
         <field name="name">Chat Session Sequence</field>
-        <field name="code">dke.chat.session</field>
+        <field name="code">dke.ticketing.session</field>
         <field name="prefix">SES/</field>
         <field name="padding">4</field>
         <field name="number_increment">1</field>

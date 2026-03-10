@@ -4,7 +4,7 @@ from odoo import models, fields, api
 from odoo.exceptions import ValidationError
 
 
-class ChatSession(models.Model):
+class TicketingSession(models.Model):
     """Chat session lifecycle tracking.
 
     Tracks a single interaction session within a chat room,
@@ -12,16 +12,16 @@ class ChatSession(models.Model):
 
     EPIC01 - PBI-6
     """
-    _name = 'dke.chat.session'
+    _name = 'dke.ticketing.session'
     _description = 'Chat Session'
     _order = 'started_at desc'
 
     session_code = fields.Char(
         string='Session Code', required=True, copy=False, readonly=True,
-        default=lambda self: self.env['ir.sequence'].next_by_code('dke.chat.session') or 'NEW'
+        default=lambda self: self.env['ir.sequence'].next_by_code('dke.ticketing.session') or 'NEW'
     )
     room_id = fields.Many2one(
-        'dke.chat.room', string='Chat Room',
+        'dke.ticketing.room', string='Chat Room',
         required=True, ondelete='cascade'
     )
 

@@ -10,7 +10,7 @@ DKE Smart Sales Platform
 AI-Powered Omnichannel Sales & Customer Engagement System built on Odoo 17.
 
 Key Features:
-- Unified Chat System with Marketplace Integration (Shopee, WhatsApp)
+- Unified Ticketing System with Marketplace Integration (Shopee, WhatsApp)
 - Automated Follow-Up & Scheduled Messaging
 - Personalized Marketing Campaign with Customer Segmentation
 - Marketplace Transaction Sync & Analytics
@@ -38,8 +38,8 @@ Key Features:
         'data/dke_crm_demo_users.xml',
 
         # Views
-        'views/chat_room_views.xml',
-        'views/chat_message_views.xml',
+        'views/ticketing_room_views.xml',
+        'views/ticketing_message_views.xml',
         'views/marketing_campaign_views.xml',
         'views/customer_segment_views.xml',
         'views/sale_transaction_views.xml',
