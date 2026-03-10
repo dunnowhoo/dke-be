@@ -6,6 +6,7 @@ import logging
 
 from odoo import http, fields
 from odoo.http import request
+from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
@@ -79,8 +80,10 @@ class IntegrationController(http.Controller):
         hub_token = params.get('hub.verify_token') or request.params.get('hub.verify_token')
         hub_challenge = params.get('hub.challenge') or request.params.get('hub.challenge')
 
-        config = request.env['dke.whatsapp.config'].sudo().get_active_config()
-        expected_token = config.webhook_verify_token if config else ''
+        account = request.env['whatsapp.account'].sudo().search(
+            [('active', '=', True)], limit=1,
+        )
+        expected_token = account.webhook_verify_token if account else ''
 
         if hub_mode == 'subscribe' and hub_token == expected_token:
             _logger.info("WhatsApp webhook verified successfully.")
@@ -231,134 +234,241 @@ class IntegrationController(http.Controller):
         # ── 8. Update ticketing_room last_message_time ───────────────
         ticketing_room.sudo().write({'last_message_time': msg_time})
 
-        # ── 9. Update last_sync_time on config ──────────────────
-        config = request.env['dke.whatsapp.config'].sudo().get_active_config()
-        if config:
-            config.sudo().write({'last_sync_time': fields.Datetime.now()})
-
         _logger.info(
             "WhatsApp: saved message %s from %s (room=%s)",
             wa_message_id, phone, ticketing_room.id,
         )
 
-    # ── Config Endpoints ────────────────────────────────────────
+    # ── Config Endpoints (bridged to Odoo whatsapp.account) ──────
 
-    @http.route('/api/integration/whatsapp/auth', type='json', auth='user', methods=['POST'])
-    def whatsapp_auth(self, **kwargs):
-        """POST /api/integration/whatsapp/auth — Save & validate WhatsApp config.
-
-        Body: { api_token, phone_number_id, webhook_url, webhook_verify_token }
-
-        EPIC02 - PBI-7: Validates token against Meta API (401 if expired/invalid).
-        Catat last_sync_time jika koneksi berhasil.
-        """
-        api_token = kwargs.get('api_token', '').strip()
-        phone_number_id = kwargs.get('phone_number_id', '').strip()
-        webhook_url = kwargs.get('webhook_url', '').strip()
-        webhook_verify_token = kwargs.get('webhook_verify_token', '').strip()
-
-        if not api_token or not phone_number_id:
-            return {
-                'status': 'error',
-                'message': 'api_token dan phone_number_id wajib diisi.',
-            }
-
-        env = request.env
-
-        # Get or create singleton config
-        config = env['dke.whatsapp.config'].sudo().get_active_config()
-        vals = {
-            'api_token': api_token,
-            'phone_number_id': phone_number_id,
-            'webhook_url': webhook_url or False,
-            'webhook_verify_token': webhook_verify_token or False,
-        }
-        if config:
-            config.sudo().write(vals)
-        else:
-            config = env['dke.whatsapp.config'].sudo().create(vals)
-
-        # Validate token
-        success, message = config.validate_token()
-        if not success:
-            http_code = 401 if 'expired' in message.lower() or '401' in message else 400
-            return {
-                'status': 'error',
-                'message': message,
-                'http_code': http_code,
-            }
-
-        config.sudo().write({'last_sync_time': fields.Datetime.now()})
-
+    @staticmethod
+    def _account_to_dict(account):
+        """Serialize whatsapp.account to API-safe dict."""
         return {
-            'status': 'success',
-            'message': message,
-            'data': {
-                'state': config.state,
-                'phone_number': config.phone_number,
-                'last_sync_time': fields.Datetime.to_string(config.last_sync_time),
-            },
+            'state': 'connected',
+            'name': account.name or '',
+            'app_id': account.app_uid or '',
+            'account_id': account.account_uid or '',
+            'phone_number_id': account.phone_uid or '',
+            'phone_number': account.phone_uid or '',
+            'webhook_url': account.callback_url or '',
+            'webhook_verify_token': account.webhook_verify_token or '',
+            'last_sync_time': None,
         }
 
-    @http.route('/api/integration/whatsapp/status', type='json', auth='user', methods=['POST'])
+    _EMPTY_CONFIG = {
+        'state': 'disconnected',
+        'name': None,
+        'app_id': None,
+        'account_id': None,
+        'phone_number_id': None,
+        'phone_number': None,
+        'webhook_url': None,
+        'webhook_verify_token': None,
+        'last_sync_time': None,
+    }
+
+    @http.route(
+        '/api/integration/whatsapp/status',
+        type='http', auth='user', methods=['GET'], csrf=False, cors='*',
+    )
     def whatsapp_status(self, **kwargs):
-        """GET /api/integration/whatsapp/status — Cek status koneksi WhatsApp.
+        """GET /api/integration/whatsapp/status — Cek status koneksi.
 
-        EPIC02 - PBI-7: Endpoint untuk card status di /settings/integrations.
+        EPIC02 - PBI-7: Reads from Odoo whatsapp.account.
         """
-        config = request.env['dke.whatsapp.config'].sudo().get_active_config()
+        try:
+            account = request.env['whatsapp.account'].sudo().search(
+                [('active', '=', True)], limit=1,
+            )
+            data = self._account_to_dict(account) if account else self._EMPTY_CONFIG
+            return request.make_json_response({'status': 'success', 'data': data})
+        except Exception as e:
+            _logger.error('whatsapp_status error: %s', e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500,
+            )
 
-        if not config:
-            return {
+    @http.route(
+        ['/api/integration/whatsapp/auth', '/api/integration/whatsapp/config'],
+        type='http', auth='user', methods=['POST', 'PUT'], csrf=False, cors='*',
+    )
+    def whatsapp_auth(self, **kwargs):
+        """POST|PUT /api/integration/whatsapp/auth — Save & validate config.
+
+        Body: { name, app_id, app_secret, account_id, phone_number_id, api_token }
+        Creates or updates Odoo whatsapp.account and tests connection.
+        """
+        try:
+            raw = request.httprequest.data
+            body = json.loads(raw) if raw else {}
+
+            app_id = (body.get('app_id') or '').strip()
+            app_secret = (body.get('app_secret') or '').strip()
+            account_id = (body.get('account_id') or '').strip()
+            phone_number_id = (body.get('phone_number_id') or '').strip()
+            token = (body.get('api_token') or '').strip()
+            name = (body.get('name') or 'DKE WhatsApp').strip()
+
+            # Validation — all five credential fields are required
+            missing = []
+            if not app_id:
+                missing.append('App ID')
+            if not app_secret:
+                missing.append('App Secret')
+            if not account_id:
+                missing.append('Account ID')
+            if not phone_number_id:
+                missing.append('Phone Number ID')
+            if not token:
+                missing.append('Access Token')
+
+            account = request.env['whatsapp.account'].sudo().search(
+                [('active', '=', True)], limit=1,
+            )
+
+            # For updates, only require fields that were actually sent
+            if account:
+                missing = []  # allow partial update
+
+            if missing:
+                return request.make_json_response(
+                    {'status': 'error', 'message': '%s wajib diisi.' % ', '.join(missing)},
+                    status=400,
+                )
+
+            vals = {}
+            if name:
+                vals['name'] = name
+            if app_id:
+                vals['app_uid'] = app_id
+            if app_secret:
+                vals['app_secret'] = app_secret
+            if account_id:
+                vals['account_uid'] = account_id
+            if phone_number_id:
+                vals['phone_uid'] = phone_number_id
+            if token:
+                vals['token'] = token
+
+            if account:
+                account.sudo().write(vals)
+            else:
+                account = request.env['whatsapp.account'].sudo().create(vals)
+
+            # Test connection via Odoo WhatsApp addon
+            try:
+                account.button_test_connection()
+            except (UserError, ValidationError) as ve:
+                return request.make_json_response(
+                    {'status': 'error', 'message': str(ve)}, status=400,
+                )
+
+            return request.make_json_response({
                 'status': 'success',
-                'data': {
-                    'state': 'disconnected',
-                    'phone_number': None,
-                    'phone_number_id': None,
-                    'webhook_url': None,
-                    'last_sync_time': None,
-                },
-            }
+                'message': 'WhatsApp berhasil terhubung!',
+                'data': self._account_to_dict(account),
+            })
+        except json.JSONDecodeError:
+            return request.make_json_response(
+                {'status': 'error', 'message': 'Invalid JSON body.'}, status=400,
+            )
+        except Exception as e:
+            _logger.error('whatsapp_auth error: %s', e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500,
+            )
 
-        return {
-            'status': 'success',
-            'data': {
-                'state': config.state,
-                'phone_number': config.phone_number,
-                'phone_number_id': config.phone_number_id,
-                'webhook_url': config.webhook_url,
-                'last_sync_time': fields.Datetime.to_string(config.last_sync_time) if config.last_sync_time else None,
-            },
-        }
-
-    @http.route('/api/integration/whatsapp/disconnect', type='json', auth='user', methods=['POST'])
-    def whatsapp_disconnect(self, **kwargs):
-        """POST /api/integration/whatsapp/disconnect — Putuskan koneksi WhatsApp.
-
-        EPIC02 - PBI-8: Disconnect button di settings/integrations.
-        """
-        config = request.env['dke.whatsapp.config'].sudo().get_active_config()
-        if config:
-            config.disconnect()
-
-        return {'status': 'success', 'message': 'WhatsApp berhasil diputus.'}
-
-    @http.route('/api/integration/whatsapp/test', type='json', auth='user', methods=['POST'])
+    @http.route(
+        '/api/integration/whatsapp/test',
+        type='http', auth='user', methods=['POST'], csrf=False, cors='*',
+    )
     def whatsapp_test(self, **kwargs):
-        """POST /api/integration/whatsapp/test — Test koneksi dengan token saat ini.
+        """POST /api/integration/whatsapp/test — Test koneksi.
 
-        EPIC02 - PBI-8: Tombol 'Test Connection' di settings/integrations.
+        EPIC02 - PBI-8: Calls Odoo whatsapp.account.button_test_connection.
         """
-        config = request.env['dke.whatsapp.config'].sudo().get_active_config()
-        if not config:
-            return {'status': 'error', 'message': 'Konfigurasi WhatsApp belum ada.'}
+        try:
+            account = request.env['whatsapp.account'].sudo().search(
+                [('active', '=', True)], limit=1,
+            )
+            if not account:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Konfigurasi WhatsApp belum ada.'},
+                    status=404,
+                )
+            try:
+                account.button_test_connection()
+            except (UserError, ValidationError) as ve:
+                return request.make_json_response(
+                    {'status': 'error', 'message': str(ve)}, status=400,
+                )
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Koneksi berhasil!',
+                'data': self._account_to_dict(account),
+            })
+        except Exception as e:
+            _logger.error('whatsapp_test error: %s', e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500,
+            )
 
-        success, message = config.validate_token()
-        return {
-            'status': 'success' if success else 'error',
-            'message': message,
-            'data': {
-                'state': config.state,
-                'phone_number': config.phone_number,
-            },
-        }
+    @http.route(
+        '/api/integration/whatsapp/disconnect',
+        type='http', auth='user', methods=['POST'], csrf=False, cors='*',
+    )
+    def whatsapp_disconnect(self, **kwargs):
+        """POST /api/integration/whatsapp/disconnect — Putuskan koneksi.
+
+        EPIC02 - PBI-8: Deactivates the whatsapp.account record.
+        """
+        try:
+            account = request.env['whatsapp.account'].sudo().search(
+                [('active', '=', True)], limit=1,
+            )
+            if account:
+                account.sudo().write({'active': False})
+            return request.make_json_response(
+                {'status': 'success', 'message': 'WhatsApp berhasil diputus.'},
+            )
+        except Exception as e:
+            _logger.error('whatsapp_disconnect error: %s', e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500,
+            )
+
+    @http.route(
+        '/api/integration/whatsapp/sync',
+        type='http', auth='user', methods=['GET'], csrf=False, cors='*',
+    )
+    def whatsapp_sync(self, **kwargs):
+        """GET /api/integration/whatsapp/sync — Sinkronisasi template.
+
+        EPIC02 - PBI-8: Calls Odoo whatsapp.account.button_sync_whatsapp_account_templates.
+        """
+        try:
+            account = request.env['whatsapp.account'].sudo().search(
+                [('active', '=', True)], limit=1,
+            )
+            if not account:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Konfigurasi WhatsApp belum ada.'},
+                    status=404,
+                )
+            try:
+                account.button_sync_whatsapp_account_templates()
+            except (UserError, ValidationError) as ve:
+                return request.make_json_response(
+                    {'status': 'error', 'message': str(ve)}, status=400,
+                )
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Template berhasil disinkronisasi.',
+                'data': {'synced_at': fields.Datetime.to_string(fields.Datetime.now())},
+            })
+        except Exception as e:
+            _logger.error('whatsapp_sync error: %s', e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500,
+            )
