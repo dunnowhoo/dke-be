@@ -17,8 +17,6 @@ from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
 
-_logger = logging.getLogger(__name__)
-
 
 class IntegrationController(http.Controller):
     """REST API endpoints for Marketplace (Shopee) & WhatsApp integration.
@@ -630,6 +628,16 @@ class IntegrationController(http.Controller):
 
         # ── 8. Update chat_room last_message_time ───────────────
         chat_room.sudo().write({'last_message_time': msg_time})
+
+        # ── 9. Post to Discuss (mail.thread) for Odoo inbox ────
+        try:
+            chat_room.sudo().message_post(
+                body='[%s] %s' % (customer_name, content),
+                message_type='comment',
+                subtype_xmlid='mail.mt_comment',
+            )
+        except Exception:
+            _logger.warning('Failed to post WA message to Discuss for room %s', chat_room.id, exc_info=True)
 
         _logger.info(
             "WhatsApp: saved message %s from %s (room=%s)",
