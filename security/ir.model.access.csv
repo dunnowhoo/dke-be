@@ -35,3 +35,8 @@ access_shopee_order_item_manager,shopee.order.item.manager,model_shopee_order_it
 access_shopee_order_item_staff,shopee.order.item.staff,model_shopee_order_item,group_sales_staff,1,0,0,0
 access_shopee_order_escrow_manager,shopee.order.escrow.manager,model_shopee_order_escrow,group_sales_manager,1,1,1,1
 access_shopee_order_escrow_staff,shopee.order.escrow.staff,model_shopee_order_escrow,group_sales_staff,1,0,0,0
+access_faq_article_care,dke.faq.article.care,model_dke_faq_article,group_customer_care,1,0,0,0
+access_faq_article_expert,dke.faq.article.expert,model_dke_faq_article,group_expert_staff,1,1,1,0
+access_faq_article_manager,dke.faq.article.manager,model_dke_faq_article,group_sales_manager,1,1,1,1
+access_faq_article_version_expert,dke.faq.article.version.expert,model_dke_faq_article_version,group_expert_staff,1,0,0,0
+access_faq_article_version_manager,dke.faq.article.version.manager,model_dke_faq_article_version,group_sales_manager,1,1,1,1

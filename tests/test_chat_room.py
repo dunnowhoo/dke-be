@@ -31,5 +31,5 @@ class TestChatRoom(TransactionCase):
 
     def test_chat_room_message_count(self):
         """Test message counting on chat room."""
-        # TODO: Implement message counting tests
+        # TODO: Implement message tests
         pass
