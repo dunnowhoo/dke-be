@@ -1,8 +1,15 @@
 # -*- coding: utf-8 -*-
 
+import hashlib
+import hmac
 import json
 import datetime
 import logging
+import time
+
+import requests
+import werkzeug.exceptions
+import werkzeug.utils
 
 from odoo import http, fields
 from odoo.http import request
@@ -12,43 +19,431 @@ _logger = logging.getLogger(__name__)
 
 
 class IntegrationController(http.Controller):
-    """REST API endpoints for Marketplace & WhatsApp integration management.
+    """REST API endpoints for Marketplace (Shopee) & WhatsApp integration.
 
-    EPIC07 - PBI-10, PBI-11 : Marketplace/Transaksi (auth & status)
+    EPIC07 - PBI-10, PBI-11 : Shopee OAuth & status
     EPIC02 - PBI-7          : WhatsApp Webhook & Config
     EPIC02 - PBI-8          : WhatsApp Sinkronisasi & Disconnect
     """
 
     # ══════════════════════════════════════════════════════════════
-    # MARKETPLACE (EPIC07 - PBI-10, PBI-11)
+    # SHOPEE OAUTH (EPIC07 - PBI-10)
     # ══════════════════════════════════════════════════════════════
 
-    @http.route('/api/integration/marketplace/auth', type='json', auth='user', methods=['POST'])
-    def marketplace_auth(self, **kwargs):
-        """POST /api/integration/marketplace/auth — Authenticate with marketplace.
+    def _get_shopee_config(self):
+        """Ambil shopee.config aktif dari DB."""
+        return request.env["shopee.config"].sudo().search([("active", "=", True)], limit=1)
 
-        EPIC07 - PBI-10: Infrastruktur koneksi untuk sinkronisasi data transaksi.
+    def _require_shopee_access(self):
+        """Raise 403 jika user bukan Admin atau Sales Manager."""
+        user = request.env.user
+        if not (
+            user.has_group("dke_crm.group_sales_manager")
+            or user.has_group("base.group_system")
+        ):
+            raise werkzeug.exceptions.Forbidden(
+                "Akses ditolak. Hanya Sales Manager atau Admin yang diizinkan."
+            )
+
+    def _shopee_sign_auth(self, partner_id, partner_key, path, timestamp):
+        """HMAC-SHA256 untuk auth endpoints (no access_token / shop_id)."""
+        base = f"{partner_id}{path}{timestamp}"
+        return hmac.new(
+            partner_key.encode("utf-8"),
+            base.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+
+    @http.route(
+        "/api/integration/shopee/auth-url",
+        type="json",
+        auth="user",
+        methods=["POST"],
+        groups="dke_crm.group_sales_manager,base.group_system",
+    )
+    def shopee_get_auth_url(self, **kwargs):
+        """POST /api/integration/shopee/auth-url — Simpan credentials & generate Shopee OAuth URL.
+
+        Body params (wajib):
+            partner_id   (str/int) : Shopee Partner ID
+            partner_key  (str)     : Shopee Partner Key
+            redirect_url (str)     : OAuth callback URL di Frontend
+        Body params (opsional):
+            is_sandbox   (bool)    : Gunakan sandbox (default False / production)
+
+        Credentials disimpan ke shopee.config agar callback bisa menukar token.
+        EPIC07 - PBI-10
         """
-        # TODO: Implement marketplace OAuth authentication
-        return {'status': 'ok'}
+        self._require_shopee_access()
+        params         = kwargs.get('params', kwargs)
+        partner_id_raw = params.get('partner_id', '')
+        partner_key    = (params.get('partner_key') or '').strip()
+        redirect_url   = (params.get('redirect_url') or '').strip()
+        is_sandbox     = params.get('is_sandbox', False)
 
-    @http.route('/api/integration/marketplace/status', type='json', auth='user', methods=['POST'])
-    def marketplace_status(self, **kwargs):
-        """GET /api/integration/marketplace/status — Check connection status.
+        # ── Validasi ────────────────────────────────────────────
+        if not partner_id_raw:
+            return {"status": "error", "message": "partner_id wajib diisi."}
+        if not partner_key:
+            return {"status": "error", "message": "partner_key wajib diisi."}
+        if not redirect_url:
+            return {"status": "error", "message": "redirect_url wajib diisi."}
 
-        EPIC07 - PBI-10: Cek status koneksi sebelum sync transaksi.
+        try:
+            partner_id = int(partner_id_raw)
+        except (ValueError, TypeError):
+            return {"status": "error", "message": "partner_id harus berupa angka."}
+
+        # ── Simpan / update config di DB ─────────────────────────
+        ShopeeConfig = request.env["shopee.config"].sudo()
+        config = ShopeeConfig.search([("active", "=", True)], limit=1)
+        vals = {
+            "partner_id":  str(partner_id),
+            "partner_key": partner_key,
+            "redirect_url": redirect_url,
+            "is_sandbox":  is_sandbox,
+        }
+        if config:
+            config.write(vals)
+        else:
+            ShopeeConfig.create({**vals, "shop_name": "Pending OAuth"})
+
+        # ── Base URL ────────────────────────────────────────────
+        BASE_URL_SANDBOX = "https://partner.test-stable.shopeemobile.com"
+        BASE_URL_PROD    = "https://partner.shopeemobile.com"
+        base_url = BASE_URL_SANDBOX if is_sandbox else BASE_URL_PROD
+
+        # ── Generate HMAC-SHA256 sign & auth URL ─────────────────
+        path = "/api/v2/shop/auth_partner"
+        ts   = int(time.time())
+        sign = self._shopee_sign_auth(partner_id, partner_key, path, ts)
+
+        auth_url = (
+            f"{base_url}{path}"
+            f"?partner_id={partner_id}&timestamp={ts}&sign={sign}"
+            f"&redirect={redirect_url}"
+        )
+
+        _logger.info(
+            "[Shopee OAuth] Auth URL generated & config saved: partner_id=%s sandbox=%s",
+            partner_id, is_sandbox,
+        )
+
+        return {
+            "status": "success",
+            "data": {
+                "auth_url":    auth_url,
+                "partner_id":  partner_id,
+                "timestamp":   ts,
+                "is_sandbox":  is_sandbox,
+                "redirect_url": redirect_url,
+            },
+        }
+
+    @http.route(
+        "/api/integration/shopee/exchange-token",
+        type="json",
+        auth="user",
+        methods=["POST"],
+        groups="dke_crm.group_sales_manager,base.group_system",
+    )
+    def shopee_exchange_token(self, **kwargs):
+        """POST /api/integration/shopee/exchange-token — Tukar auth code dengan access token.
+
+        Dipanggil oleh Frontend callback page setelah user authorize di Shopee.
+        Credentials (partner_id, partner_key) diambil dari DB yang sudah tersimpan
+        saat /auth-url dipanggil sebelumnya.
+
+        Body params (wajib):
+            code     (str)     : Authorization code dari query param Shopee
+            shop_id  (str/int) : Shop ID dari query param Shopee
+
+        EPIC07 - PBI-10
         """
-        # TODO: Implement connection status check
-        return {'status': 'ok', 'connected': False, 'last_sync': None}
+        self._require_shopee_access()
+        params  = kwargs.get('params', kwargs)
+        code    = (params.get('code') or '').strip()
+        shop_id = params.get('shop_id')
 
-    @http.route('/api/integration/marketplace/send', type='json', auth='user', methods=['POST'])
-    def marketplace_send(self, **kwargs):
-        """POST /api/integration/marketplace/send — Send message via marketplace.
+        if not code:
+            return {"status": "error", "message": "code wajib diisi."}
+        if not shop_id:
+            return {"status": "error", "message": "shop_id wajib diisi."}
 
-        EPIC07 - PBI-11: Digunakan saat sinkronisasi status transaksi marketplace.
+        try:
+            shop_id = int(shop_id)
+        except (ValueError, TypeError):
+            return {"status": "error", "message": "shop_id harus berupa angka."}
+
+        config = request.env["shopee.config"].sudo().search([("active", "=", True)], limit=1)
+        if not config:
+            return {
+                "status": "error",
+                "message": "Konfigurasi Shopee belum ada. Silakan setup partner credential terlebih dahulu.",
+            }
+
+        partner_id  = int(config.partner_id)
+        partner_key = config.partner_key
+        base_url    = config.get_base_url()
+        path        = "/api/v2/auth/token/get"
+        ts          = int(time.time())
+        sign        = self._shopee_sign_auth(partner_id, partner_key, path, ts)
+
+        body = {
+            "code":       code,
+            "shop_id":    shop_id,
+            "partner_id": partner_id,
+        }
+        query_params = {
+            "partner_id": partner_id,
+            "timestamp":  ts,
+            "sign":       sign,
+        }
+
+        try:
+            resp = requests.post(
+                f"{base_url}{path}",
+                json=body,
+                params=query_params,
+                headers={"Content-Type": "application/json"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            _logger.exception("[Shopee OAuth] exchange-token HTTP error: %s", exc)
+            return {"status": "error", "message": f"Gagal menghubungi Shopee: {str(exc)}"}
+
+        access_token = data.get("access_token")
+        if not access_token:
+            error_msg = data.get("message", "Unknown error")
+            _logger.error("[Shopee OAuth] Token exchange gagal: %s", data)
+            return {"status": "error", "message": f"Shopee error: {error_msg}"}
+
+        expire_in  = data.get("expire_in", 0)
+        ts_now     = int(time.time())
+        shop_name  = data.get("shop_name") or f"Shop {shop_id}"
+        config.sudo().write({
+            "access_token":    access_token,
+            "refresh_token":   data.get("refresh_token") or False,
+            "token_expire_in": expire_in,
+            "token_expire_at": ts_now + expire_in,
+            "shop_id":         shop_id,
+            "shop_name":       shop_name,
+        })
+
+        _logger.info(
+            "[Shopee OAuth] Token berhasil disimpan. shop_id=%s expires_in=%s",
+            shop_id, expire_in,
+        )
+
+        return {
+            "status": "success",
+            "message": "Shopee berhasil terhubung.",
+            "data": {"shop_id": shop_id, "expires_in": expire_in},
+        }
+
+    @http.route(
+        "/shopee/oauth/callback",
+        type="http",
+        auth="none",
+        methods=["GET"],
+        csrf=False,
+    )
+    def shopee_oauth_callback(self, code=None, shop_id=None, **kwargs):
+        """GET /shopee/oauth/callback — Callback dari Shopee setelah user authorize.
+
+        Shopee redirect ke sini dengan ?code=XXX&shop_id=YYY.
+        Endpoint ini menukar code dengan access_token lalu menyimpan ke DB.
+        EPIC07 - PBI-10
         """
-        # TODO: Implement marketplace message sending
-        return {'status': 'ok'}
+        if not code or not shop_id:
+            _logger.warning("[Shopee OAuth] Callback tanpa code/shop_id. params=%s", kwargs)
+            return request.make_response(
+                "<h2>OAuth Error</h2><p>Parameter code atau shop_id tidak ditemukan.</p>",
+                headers=[("Content-Type", "text/html")],
+                status=400,
+            )
+
+        config = request.env["shopee.config"].sudo().search([("active", "=", True)], limit=1)
+        if not config:
+            return request.make_response(
+                "<h2>Error</h2><p>Konfigurasi Shopee belum dibuat di Odoo.</p>",
+                headers=[("Content-Type", "text/html")],
+                status=400,
+            )
+
+        partner_id = int(config.partner_id)
+        partner_key = config.partner_key
+        base_url = config.get_base_url()
+        path = "/api/v2/auth/token/get"
+        ts = int(time.time())
+        sign = self._shopee_sign_auth(partner_id, partner_key, path, ts)
+
+        body = {
+            "code":       code,
+            "shop_id":    int(shop_id),
+            "partner_id": partner_id,
+        }
+        query_params = {
+            "partner_id": partner_id,
+            "timestamp":  ts,
+            "sign":       sign,
+        }
+
+        try:
+            resp = requests.post(
+                f"{base_url}{path}",
+                json=body,
+                params=query_params,
+                headers={"Content-Type": "application/json"},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            _logger.exception("[Shopee OAuth] Error saat tukar code: %s", exc)
+            return request.make_response(
+                f"<h2>OAuth Error</h2><p>Gagal menghubungi Shopee: {exc}</p>",
+                headers=[("Content-Type", "text/html")],
+                status=500,
+            )
+
+        access_token = data.get("access_token")
+        if not access_token:
+            error_msg = data.get("message", "Unknown error")
+            _logger.error("[Shopee OAuth] Token exchange gagal: %s", data)
+            return request.make_response(
+                f"<h2>OAuth Error</h2><p>Shopee mengembalikan error: {error_msg}</p>",
+                headers=[("Content-Type", "text/html")],
+                status=400,
+            )
+
+        expire_in = data.get("expire_in", 0)
+        config.sudo().write({
+            "access_token": access_token,
+            "refresh_token": data.get("refresh_token") or False,
+            "token_expire_in": expire_in,
+            "token_expire_at": ts + expire_in,
+            "shop_id": int(shop_id),
+            "shop_name": data.get("shop_name") or f"Shop {shop_id}",
+        })
+
+        _logger.info(
+            "[Shopee OAuth] Token berhasil disimpan. shop_id=%s expires_in=%s",
+            shop_id, expire_in,
+        )
+
+        # Redirect balik ke form config di Odoo backend
+        redirect_to = f"/web#model=shopee.config&id={config.id}&view_type=form"
+        return werkzeug.utils.redirect(redirect_to)
+
+    @http.route(
+        "/api/integration/shopee/token/refresh",
+        type="json",
+        auth="user",
+        methods=["POST"],
+        groups="dke_crm.group_sales_manager,base.group_system",
+    )
+    def shopee_token_refresh(self, **kwargs):
+        """POST /api/integration/shopee/token/refresh — Refresh access token Shopee.
+
+        EPIC07 - PBI-10
+        """
+        self._require_shopee_access()
+        config = self._get_shopee_config()
+        if not config:
+            return {"status": "error", "message": "Konfigurasi Shopee belum ada."}
+
+        if not config.refresh_token:
+            return {"status": "error", "message": "Refresh token tidak tersedia. Silakan connect ulang."}
+
+        # Force refresh: panggil langsung dengan force=True
+        success = config.refresh_token_if_needed(force=True)
+
+        if not success:
+            return {"status": "error", "message": "Gagal refresh token. Cek log untuk detail."}
+
+        return {
+            "status": "success",
+            "message": "Token berhasil diperbarui.",
+            "data": {"expires_in": config.token_expire_in},
+        }
+
+    @http.route(
+        "/api/integration/shopee/status",
+        type="json",
+        auth="user",
+        methods=["POST"],
+        groups="dke_crm.group_sales_manager,base.group_system",
+    )
+    def shopee_status(self, **kwargs):
+        """POST /api/integration/shopee/status — Cek status koneksi Shopee.
+
+        EPIC07 - PBI-10
+        """
+        self._require_shopee_access()
+        config = self._get_shopee_config()
+        if not config:
+            return {
+                "status": "success",
+                "data": {
+                    "connected": False,
+                    "shop_name": None,
+                    "shop_id": None,
+                    "connection_status": "disconnected",
+                    "token_expire_at": None,
+                    "last_sync": None,
+                    "is_sandbox": False,
+                    "use_dummy": False,
+                },
+            }
+
+        now = int(time.time())
+        connection_status = "disconnected"
+        if config.access_token:
+            if config.token_expire_at and now >= config.token_expire_at:
+                connection_status = "expired"
+            else:
+                connection_status = "connected"
+
+        return {
+            "status": "success",
+            "data": {
+                "connected": connection_status == "connected",
+                "shop_name": config.shop_name,
+                "shop_id": config.shop_id or None,
+                "connection_status": connection_status,
+                "token_expire_at": config.token_expire_at or None,
+                "last_sync": fields.Datetime.to_string(config.last_sync) if config.last_sync else None,
+                "is_sandbox": config.is_sandbox,
+                "use_dummy": config.use_dummy,
+            },
+        }
+
+    @http.route(
+        "/api/integration/shopee/disconnect",
+        type="json",
+        auth="user",
+        methods=["POST"],
+        groups="dke_crm.group_sales_manager,base.group_system",
+    )
+    def shopee_disconnect(self, **kwargs):
+        """POST /api/integration/shopee/disconnect — Putuskan koneksi Shopee.
+
+        EPIC07 - PBI-10
+        """
+        self._require_shopee_access()
+        config = self._get_shopee_config()
+        if config:
+            config.sudo().write({
+                "access_token": False,
+                "refresh_token": False,
+                "token_expire_in": 0,
+                "token_expire_at": 0,
+            })
+
+        return {"status": "success", "message": "Koneksi Shopee berhasil diputus."}
 
     # ══════════════════════════════════════════════════════════════
     # WHATSAPP (EPIC02 - PBI-7)

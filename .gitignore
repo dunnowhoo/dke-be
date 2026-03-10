@@ -65,3 +65,4 @@ pgdata/
 htmlcov/
 .pytest_cache/
 node_modules/
+docs/

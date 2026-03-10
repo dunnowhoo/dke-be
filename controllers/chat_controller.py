@@ -712,7 +712,7 @@ class ChatController(http.Controller):
 
             return request.make_json_response({
                 'status': 'success',
-                'message': 'Chat berhasil diambil.',
+                'message': 'Chat berhasil diambil.,
                 'data': self._room_to_dict(room),
             })
         except Exception as e:
