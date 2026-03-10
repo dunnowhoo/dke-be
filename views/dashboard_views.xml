@@ -9,7 +9,7 @@
     <!-- Ticketing Monitoring Action (EPIC07) -->
     <record id="action_dke_support_ticketing_monitoring" model="ir.actions.act_window">
         <field name="name">Ticketing Monitoring</field>
-        <field name="res_model">dke.support.ticketing.monitoring</field>
+        <field name="res_model">dke.ticketing.monitoring</field>
         <field name="view_mode">tree,form</field>
     </record>
 

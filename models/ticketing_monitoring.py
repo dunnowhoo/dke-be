@@ -3,12 +3,12 @@
 from odoo import models, fields, api
 
 
-class ChatMonitoring(models.Model):
-    """Chat response monitoring for Customer Care performance.
+class TicketingMonitoring(models.Model):
+    """Ticketing response monitoring for Customer Care performance.
 
     EPIC07 - PBI-22, PBI-23
     """
-    _name = 'dke.chat.monitoring'
+    _name = 'dke.ticketing.monitoring'
     _description = 'Ticketing Monitoring'
     _order = 'record_date desc'
 
