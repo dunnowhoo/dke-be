@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- FAQ Article Tree View -->
+    <record id="dke_faq_article_view_tree" model="ir.ui.view">
+        <field name="name">dke.faq.article.tree</field>
+        <field name="model">dke.faq.article</field>
+        <field name="arch" type="xml">
+            <tree string="FAQ Articles"
+                  decoration-muted="status == 'deleted'"
+                  decoration-info="status == 'draft'"
+                  decoration-success="status == 'published'">
+                <field name="title"/>
+                <field name="category"/>
+                <field name="tags"/>
+                <field name="author_id"/>
+                <field name="status"/>
+                <field name="write_date" string="Last Updated"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- FAQ Article Form View -->
+    <record id="dke_faq_article_view_form" model="ir.ui.view">
+        <field name="name">dke.faq.article.form</field>
+        <field name="model">dke.faq.article</field>
+        <field name="arch" type="xml">
+            <form string="FAQ Article">
+                <header>
+                    <field name="status" widget="statusbar"
+                           statusbar_visible="draft,published"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="title" placeholder="Article Title"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="category"/>
+                            <field name="tags"/>
+                            <field name="author_id"/>
+                        </group>
+                        <group>
+                            <field name="updated_by"/>
+                            <field name="deleted_at" invisible="status != 'deleted'"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Content">
+                            <field name="content" nolabel="1"/>
+                        </page>
+                        <page string="Version History">
+                            <field name="version_ids">
+                                <tree>
+                                    <field name="created_at"/>
+                                    <field name="edited_by"/>
+                                    <field name="title"/>
+                                    <field name="category"/>
+                                    <field name="status"/>
+                                </tree>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- FAQ Article Search View -->
+    <record id="dke_faq_article_view_search" model="ir.ui.view">
+        <field name="name">dke.faq.article.search</field>
+        <field name="model">dke.faq.article</field>
+        <field name="arch" type="xml">
+            <search string="Search FAQ">
+                <field name="title"/>
+                <field name="tags"/>
+                <field name="content"/>
+                <filter name="published" string="Published" domain="[('status','=','published')]"/>
+                <filter name="draft" string="Draft" domain="[('status','=','draft')]"/>
+                <group expand="0" string="Group By">
+                    <filter name="group_category" string="Category" context="{'group_by': 'category'}"/>
+                    <filter name="group_author" string="Author" context="{'group_by': 'author_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- FAQ Article Action -->
+    <record id="action_faq_article" model="ir.actions.act_window">
+        <field name="name">FAQ Articles</field>
+        <field name="res_model">dke.faq.article</field>
+        <field name="view_mode">tree,form</field>
+        <field name="domain">[('status','!=','deleted')]</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Create your first FAQ article
+            </p>
+        </field>
+    </record>
+
+</odoo>

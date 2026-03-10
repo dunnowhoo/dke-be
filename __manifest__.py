@@ -38,7 +38,6 @@ Key Features:
         'data/dke_crm_data.xml',
         'data/shopee_cron.xml',
         'data/dke_crm_demo_users.xml',
-        'data/shopee_cron.xml',
 
         # Views
         'views/chat_room_views.xml',
@@ -49,6 +48,7 @@ Key Features:
         'views/support_ticket_views.xml',
         'views/dashboard_views.xml',
         'views/shopee_integration_views.xml',
+        'views/faq_article_views.xml',
         'views/menu_views.xml',
     ],
     'demo': [],
