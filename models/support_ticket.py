@@ -19,7 +19,7 @@ class SupportTicket(models.Model):
     description = fields.Text(string='Description')
 
     # Relations
-    room_id = fields.Many2one('dke.ticketing.room', string='Source Chat Room', ondelete='set null')
+    room_id = fields.Many2one('dke.ticketing.room', string='Source Ticketing Room', ondelete='set null')
     customer_id = fields.Many2one('res.partner', string='Customer')
 
     # Assigned Staff

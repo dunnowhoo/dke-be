@@ -4,7 +4,7 @@ from odoo import models, fields, api
 
 
 class TicketingRoom(models.Model):
-    """Chat room / conversation thread.
+    """Ticketing Room / conversation thread.
 
     Represents a conversation between Customer Care and a customer,
     sourced from marketplace (Shopee) or WhatsApp.
@@ -12,7 +12,7 @@ class TicketingRoom(models.Model):
     EPIC01 - PBI-1, PBI-2, PBI-6
     """
     _name = 'dke.ticketing.room'
-    _description = 'Chat Room'
+    _description = 'Ticketing Room'
     _order = 'last_message_time desc'
 
     name = fields.Char(string='Room Name', required=True)
@@ -81,7 +81,7 @@ class TicketingRoom(models.Model):
         return self.session_ids.filtered(lambda s: s.state == 'active')[:1]
 
     def to_dict(self):
-        """Serialize chat room to dictionary for API response."""
+        """Serialize Ticketing Room to dictionary for API response."""
         self.ensure_one()
         active_session = self.get_active_session()
         assigned_name = ''

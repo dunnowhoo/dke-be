@@ -15,9 +15,9 @@ class TestTicketingRoom(TransactionCase):
         self.TicketingRoom = self.env['dke.ticketing.room']
 
     def test_create_ticketing_room(self):
-        """Test creating a basic chat room."""
+        """Test creating a basic Ticketing Room."""
         room = self.TicketingRoom.create({
-            'name': 'Test Chat Room',
+            'name': 'Test Ticketing Room',
             'customer_name': 'Test Customer',
             'source': 'shopee',
         })
@@ -25,11 +25,11 @@ class TestTicketingRoom(TransactionCase):
         self.assertEqual(room.unread_count, 0)
 
     def test_ticketing_room_state_transitions(self):
-        """Test chat room can transition between states."""
+        """Test Ticketing Room can transition between states."""
         # TODO: Implement state transition tests
         pass
 
     def test_ticketing_room_message_count(self):
-        """Test message counting on chat room."""
+        """Test message counting on Ticketing Room."""
         # TODO: Implement message counting tests
         pass

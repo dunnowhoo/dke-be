@@ -9,7 +9,7 @@ import logging
 _logger = logging.getLogger(__name__)
 
 
-class ChatController(http.Controller):
+class TicketingController(http.Controller):
     """REST API endpoints for Ticketing System.
 
     EPIC02 - PBI-9  : Melihat Daftar Semua Chat dari WhatsApp
@@ -55,7 +55,7 @@ class ChatController(http.Controller):
             'state': room.state,
             'assigned_cs': assigned_name,
             'assigned_cs_id': assigned_id,
-            'last_message_time': ChatController._fmt_dt(room.last_message_time),
+            'last_message_time': TicketingController._fmt_dt(room.last_message_time),
             'unread_count': room.unread_count,
             'session_id': active_session.id if active_session else None,
             'session_code': active_session.session_code if active_session else None,
@@ -85,7 +85,7 @@ class ChatController(http.Controller):
             'attachment_mimetype': msg.attachment_mimetype or '',
             'is_read': msg.is_read,
             'send_status': msg.send_status,
-            'created_at': ChatController._fmt_dt(msg.created_at),
+            'created_at': TicketingController._fmt_dt(msg.created_at),
         }
 
     @staticmethod
@@ -104,11 +104,11 @@ class ChatController(http.Controller):
             'assigned_expert_id': ticket.assigned_expert_id.id if ticket.assigned_expert_id else None,
             'priority': ticket.priority,
             'state': ticket.state,
-            'sla_deadline': ChatController._fmt_dt(ticket.sla_deadline),
+            'sla_deadline': TicketingController._fmt_dt(ticket.sla_deadline),
             'is_overdue': ticket.is_overdue,
-            'first_response_at': ChatController._fmt_dt(ticket.first_response_at),
-            'resolved_at': ChatController._fmt_dt(ticket.resolved_at),
-            'created_at': ChatController._fmt_dt(ticket.create_date),
+            'first_response_at': TicketingController._fmt_dt(ticket.first_response_at),
+            'resolved_at': TicketingController._fmt_dt(ticket.resolved_at),
+            'created_at': TicketingController._fmt_dt(ticket.create_date),
             'last_reply_at': None,
             'message_count': len(ticket.ticket_message_ids) if ticket.ticket_message_ids else 0,
         }
@@ -209,7 +209,7 @@ class ChatController(http.Controller):
             room = request.env['dke.ticketing.room'].sudo().browse(room_id)
             if not room.exists():
                 return request.make_json_response(
-                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                    {'status': 'error', 'message': 'Ticketing Room tidak ditemukan.'}, status=404
                 )
 
             page = max(int(kwargs.get('page', 1)), 1)
@@ -254,7 +254,7 @@ class ChatController(http.Controller):
             room = request.env['dke.ticketing.room'].sudo().browse(room_id)
             if not room.exists():
                 return request.make_json_response(
-                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                    {'status': 'error', 'message': 'Ticketing Room tidak ditemukan.'}, status=404
                 )
 
             raw = request.httprequest.data
@@ -315,7 +315,7 @@ class ChatController(http.Controller):
             room = request.env['dke.ticketing.room'].sudo().browse(room_id)
             if not room.exists():
                 return request.make_json_response(
-                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                    {'status': 'error', 'message': 'Ticketing Room tidak ditemukan.'}, status=404
                 )
 
             room.write({'state': 'done'})
@@ -347,7 +347,7 @@ class ChatController(http.Controller):
             room = request.env['dke.ticketing.room'].sudo().browse(room_id)
             if not room.exists():
                 return request.make_json_response(
-                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                    {'status': 'error', 'message': 'Ticketing Room tidak ditemukan.'}, status=404
                 )
 
             user = request.env.user
@@ -370,12 +370,12 @@ class ChatController(http.Controller):
             )
 
     # ──────────────────────────────────────────────────────────────
-    # Create new chat room
+    # Create new Ticketing Room
     # ──────────────────────────────────────────────────────────────
 
     @http.route('/api/ticketing/rooms/create', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
     def create_ticketing_room(self, **kwargs):
-        """POST /api/chat/rooms/create — Create a new chat room."""
+        """POST /api/chat/rooms/create — Create a new Ticketing Room."""
         try:
             raw = request.httprequest.data
             body = json.loads(raw) if raw else {}
@@ -440,7 +440,7 @@ class ChatController(http.Controller):
     # ─── Direct Chat (find-or-create between two users) ──────────
     @http.route('/api/ticketing/direct', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
     def direct_chat(self, **kwargs):
-        """POST /api/chat/direct — Find or create a direct chat room between current user and a partner.
+        """POST /api/chat/direct — Find or create a direct Ticketing Room between current user and a partner.
 
         Body: { "partner_id": <int> }
         Returns: the room dict (existing or newly created).
@@ -551,7 +551,7 @@ class ChatController(http.Controller):
             room = request.env['dke.ticketing.room'].sudo().browse(room_id)
             if not room.exists():
                 return request.make_json_response(
-                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                    {'status': 'error', 'message': 'Ticketing Room tidak ditemukan.'}, status=404
                 )
 
             # Get last few customer messages for context
@@ -1007,7 +1007,7 @@ class ChatController(http.Controller):
             room = request.env['dke.ticketing.room'].sudo().browse(room_id)
             if not room.exists():
                 return request.make_json_response(
-                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                    {'status': 'error', 'message': 'Ticketing Room tidak ditemukan.'}, status=404
                 )
 
             raw = request.httprequest.data
@@ -1066,7 +1066,7 @@ class ChatController(http.Controller):
             room = request.env['dke.ticketing.room'].sudo().browse(room_id)
             if not room.exists():
                 return request.make_json_response(
-                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                    {'status': 'error', 'message': 'Ticketing Room tidak ditemukan.'}, status=404
                 )
             return request.make_json_response({
                 'status': 'success',
@@ -1094,7 +1094,7 @@ class ChatController(http.Controller):
             room = request.env['dke.ticketing.room'].sudo().browse(room_id)
             if not room.exists():
                 return request.make_json_response(
-                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                    {'status': 'error', 'message': 'Ticketing Room tidak ditemukan.'}, status=404
                 )
 
             uploaded_file = request.httprequest.files.get('file')

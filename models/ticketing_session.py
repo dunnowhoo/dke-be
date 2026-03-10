@@ -5,15 +5,15 @@ from odoo.exceptions import ValidationError
 
 
 class TicketingSession(models.Model):
-    """Chat session lifecycle tracking.
+    """Ticketing Session lifecycle tracking.
 
-    Tracks a single interaction session within a chat room,
+    Tracks a single interaction session within a Ticketing Room,
     including which CS/Expert handled it, ratings, and timing.
 
     EPIC01 - PBI-6
     """
     _name = 'dke.ticketing.session'
-    _description = 'Chat Session'
+    _description = 'Ticketing Session'
     _order = 'started_at desc'
 
     session_code = fields.Char(
@@ -21,7 +21,7 @@ class TicketingSession(models.Model):
         default=lambda self: self.env['ir.sequence'].next_by_code('dke.ticketing.session') or 'NEW'
     )
     room_id = fields.Many2one(
-        'dke.ticketing.room', string='Chat Room',
+        'dke.ticketing.room', string='Ticketing Room',
         required=True, ondelete='cascade'
     )
 

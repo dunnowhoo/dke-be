@@ -4,22 +4,22 @@ from odoo import models, fields, api
 
 
 class TicketingMessage(models.Model):
-    """Individual chat message within a room.
+    """Individual Ticketing Message within a room.
 
     EPIC01 - PBI-3, PBI-4
     Supports text, image, video, file/document messages with ACID-safe storage.
     """
     _name = 'dke.ticketing.message'
-    _description = 'Chat Message'
+    _description = 'Ticketing Message'
     _order = 'created_at asc'
 
     room_id = fields.Many2one(
-        'dke.ticketing.room', string='Chat Room',
+        'dke.ticketing.room', string='Ticketing Room',
         required=True, ondelete='cascade',
         index=True,
     )
     session_id = fields.Many2one(
-        'dke.ticketing.session', string='Chat Session',
+        'dke.ticketing.session', string='Ticketing Session',
         ondelete='set null',
         help='Session this message belongs to'
     )

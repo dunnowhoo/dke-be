@@ -2,10 +2,10 @@
 <odoo>
 
     <!-- ============================================================ -->
-    <!-- Chat Room Views                                               -->
+    <!-- Ticketing Room Views                                               -->
     <!-- ============================================================ -->
 
-    <!-- Chat Room Tree View -->
+    <!-- Ticketing Room Tree View -->
     <record id="dke_ticketing_room_view_tree" model="ir.ui.view">
         <field name="name">dke.ticketing.room.tree</field>
         <field name="model">dke.ticketing.room</field>
@@ -22,12 +22,12 @@
         </field>
     </record>
 
-    <!-- Chat Room Form View -->
+    <!-- Ticketing Room Form View -->
     <record id="dke_ticketing_room_view_form" model="ir.ui.view">
         <field name="name">dke.ticketing.room.form</field>
         <field name="model">dke.ticketing.room</field>
         <field name="arch" type="xml">
-            <form string="Chat Room">
+            <form string="Ticketing Room">
                 <header>
                     <field name="state" widget="statusbar" statusbar_visible="active,done,archived"/>
                 </header>
@@ -63,7 +63,7 @@
         </field>
     </record>
 
-    <!-- Chat Room Search View -->
+    <!-- Ticketing Room Search View -->
     <record id="dke_ticketing_room_view_search" model="ir.ui.view">
         <field name="name">dke.ticketing.room.search</field>
         <field name="model">dke.ticketing.room</field>
@@ -83,7 +83,7 @@
         </field>
     </record>
 
-    <!-- Chat Room Action -->
+    <!-- Ticketing Room Action -->
     <record id="action_dke_ticketing_room" model="ir.actions.act_window">
         <field name="name">Ticketing Rooms</field>
         <field name="res_model">dke.ticketing.room</field>

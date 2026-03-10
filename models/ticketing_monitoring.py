@@ -12,7 +12,7 @@ class ChatMonitoring(models.Model):
     _description = 'Ticketing Monitoring'
     _order = 'record_date desc'
 
-    room_id = fields.Many2one('dke.ticketing.room', string='Chat Room', required=True)
+    room_id = fields.Many2one('dke.ticketing.room', string='Ticketing Room', required=True)
     care_user_id = fields.Many2one('res.users', string='Customer Care')
     customer_id = fields.Many2one('res.partner', string='Customer')
 

@@ -15,7 +15,7 @@ class ScheduledMessage(models.Model):
     _description = 'Scheduled Message'
     _order = 'send_at asc'
 
-    room_id = fields.Many2one('dke.ticketing.room', string='Chat Room', required=True, ondelete='cascade')
+    room_id = fields.Many2one('dke.ticketing.room', string='Ticketing Room', required=True, ondelete='cascade')
     customer_id = fields.Many2one('res.partner', string='Customer')
     created_by_id = fields.Many2one('res.users', string='Created By')
 
