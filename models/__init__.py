@@ -17,4 +17,6 @@ from . import ticketing_monitoring
 from . import ticket_monitoring
 from . import res_partner
 from . import res_users
+from . import shopee_integration
+from . import faq_article
 from . import notification
