@@ -9,9 +9,14 @@ class ChatRoom(models.Model):
     Represents a conversation between Customer Care and a customer,
     sourced from marketplace (Shopee) or WhatsApp.
 
+    Inherits mail.thread for Odoo Discuss integration — every chat
+    message is also posted to the chatter so CS can read/reply from
+    the Discuss inbox.
+
     EPIC01 - PBI-1, PBI-2, PBI-6
     """
     _name = 'dke.chat.room'
+    _inherit = ['mail.thread']
     _description = 'Chat Room'
     _order = 'last_message_time desc'
 
@@ -54,6 +59,13 @@ class ChatRoom(models.Model):
         help='Customer Care yang sedang menangani chat ini.',
     )
     assigned_at = fields.Datetime(string='Assigned At')
+
+    # Discuss / WhatsApp integration
+    discuss_channel_id = fields.Many2one(
+        'discuss.channel',
+        string='Discuss Channel',
+        help='Link to native Odoo WhatsApp discuss.channel for read/reply integration.',
+    )
 
     # Relations
     message_ids = fields.One2many('dke.chat.message', 'room_id', string='Messages')
