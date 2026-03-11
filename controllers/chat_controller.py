@@ -72,6 +72,21 @@ class ChatController(http.Controller):
         sender_type = msg.sender_type
         if sender_type == 'admin':
             sender_type = 'cs'
+
+        # Resolve original filename from ir.attachment when available
+        att_filename = ''
+        att_url = msg.attachment_url or ''
+        if att_url and '/web/content/' in att_url:
+            try:
+                att_id_str = att_url.split('/web/content/')[1].split('?')[0]
+                att_rec = msg.env['ir.attachment'].sudo().browse(int(att_id_str))
+                if att_rec.exists():
+                    att_filename = att_rec.name or ''
+            except Exception:
+                pass
+        if not att_filename and msg.message_type in ('image', 'file'):
+            att_filename = msg.content_text or ''
+
         return {
             'id': msg.id,
             'room_id': msg.room_id.id if msg.room_id else None,
@@ -81,7 +96,8 @@ class ChatController(http.Controller):
             'agent_name': msg.sender_id.name if msg.sender_id else None,
             'content_text': msg.content_text or '',
             'message_type': msg.message_type,
-            'attachment_url': msg.attachment_url or '',
+            'attachment_url': att_url,
+            'attachment_filename': att_filename,
             'is_read': msg.is_read,
             'is_automated': msg.is_automated,
             'send_status': msg.send_status,
@@ -106,9 +122,11 @@ class ChatController(http.Controller):
         # Check for attachments
         att = mail_msg.attachment_ids[:1] if mail_msg.attachment_ids else None
         att_url = ''
+        att_filename = ''
         msg_type = 'text'
         if att:
             att_url = '/web/content/%d?download=true' % att.id
+            att_filename = att.name or ''
             mimetype = att.mimetype or ''
             msg_type = 'image' if mimetype.startswith('image/') else 'file'
 
@@ -122,6 +140,7 @@ class ChatController(http.Controller):
             'content_text': plain,
             'message_type': msg_type,
             'attachment_url': att_url,
+            'attachment_filename': att_filename,
             'is_read': True,
             'is_automated': False,
             'send_status': 'sent',
@@ -182,6 +201,23 @@ class ChatController(http.Controller):
                                     'assigned_at': False,
                                 })
                         room.write(updates)
+
+                        # Notify via bus so the FE picks up new messages
+                        # in real-time without polling.
+                        try:
+                            msg_dict = ChatController._discuss_msg_to_dict(
+                                last_msg, ch
+                            )
+                            request.env['bus.bus']._sendone(
+                                'dke_chat_room_%s' % room.id,
+                                'chat.new_message',
+                                {'room_id': room.id, 'message': msg_dict},
+                            )
+                        except Exception:
+                            _logger.debug(
+                                'bus notification failed during sync for room %s',
+                                room.id, exc_info=True,
+                            )
                 continue
 
             # Resolve customer partner name / phone
@@ -373,7 +409,17 @@ class ChatController(http.Controller):
                 )
 
             # Only the assigned CC can reply
-            if room.is_assigned and room.assigned_to and room.assigned_to.id != request.env.user.id:
+            current_uid = request.env.user.id
+            assigned_uid = room.assigned_to.id if room.assigned_to else None
+            if room.is_assigned and assigned_uid and assigned_uid != current_uid:
+                _logger.info(
+                    'Reply blocked: room %s assigned to uid=%s (%s), '
+                    'but request comes from uid=%s (%s)',
+                    room_id, assigned_uid,
+                    room.assigned_to.name,
+                    current_uid,
+                    request.env.user.name,
+                )
                 return request.make_json_response(
                     {'status': 'error', 'message': 'Chat ini ditangani oleh %s.' % room.assigned_to.name},
                     status=403,
@@ -786,7 +832,13 @@ class ChatController(http.Controller):
                 )
 
             # Only the assigned CC can upload
-            if room.is_assigned and room.assigned_to and room.assigned_to.id != request.env.user.id:
+            current_uid = request.env.user.id
+            assigned_uid = room.assigned_to.id if room.assigned_to else None
+            if room.is_assigned and assigned_uid and assigned_uid != current_uid:
+                _logger.info(
+                    'Upload blocked: room %s assigned to uid=%s, request uid=%s',
+                    room_id, assigned_uid, current_uid,
+                )
                 return request.make_json_response(
                     {'status': 'error', 'message': 'Chat ini ditangani oleh %s.' % room.assigned_to.name},
                     status=403,
@@ -849,6 +901,7 @@ class ChatController(http.Controller):
 
                 msg_dict = self._discuss_msg_to_dict(new_mail_msg, channel)
                 msg_dict['attachment_url'] = attachment_url
+                msg_dict['attachment_filename'] = filename
                 msg_dict['message_type'] = message_type
                 if caption:
                     msg_dict['content_text'] = caption
