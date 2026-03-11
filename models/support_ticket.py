@@ -19,7 +19,7 @@ class SupportTicket(models.Model):
     description = fields.Text(string='Description')
 
     # Relations
-    room_id = fields.Many2one('dke.chat.room', string='Source Chat Room', ondelete='set null')
+    room_id = fields.Many2one('dke.ticketing.room', string='Source Ticketing Room', ondelete='set null')
     customer_id = fields.Many2one('res.partner', string='Customer')
 
     # Assigned Staff
@@ -40,6 +40,13 @@ class SupportTicket(models.Model):
         ('resolved', 'Resolved'),
         ('closed', 'Closed'),
     ], string='Status', default='open')
+
+    category = fields.Selection([
+        ('face_wash', 'Face Wash'),
+        ('serum', 'Serum'),
+        ('lotion', 'Lotion'),
+        ('toner', 'Toner'),
+    ], string='Category')
 
     # SLA
     sla_deadline = fields.Datetime(string='SLA Deadline')

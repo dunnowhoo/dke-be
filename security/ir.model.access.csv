@@ -1,8 +1,14 @@
 id,name,model_id/id,group_id/id,perm_read,perm_write,perm_create,perm_unlink
+access_ticketing_room_care,dke.ticketing.room.care,model_dke_ticketing_room,group_customer_care,1,1,1,0
+access_ticketing_room_manager,dke.ticketing.room.manager,model_dke_ticketing_room,group_sales_manager,1,1,1,1
+access_ticketing_message_care,dke.ticketing.message.care,model_dke_ticketing_message,group_customer_care,1,1,1,0
+access_ticketing_message_manager,dke.ticketing.message.manager,model_dke_ticketing_message,group_sales_manager,1,1,1,1
 access_chat_room_care,dke.chat.room.care,model_dke_chat_room,group_customer_care,1,1,1,0
 access_chat_room_manager,dke.chat.room.manager,model_dke_chat_room,group_sales_manager,1,1,1,1
 access_chat_message_care,dke.chat.message.care,model_dke_chat_message,group_customer_care,1,1,1,0
 access_chat_message_manager,dke.chat.message.manager,model_dke_chat_message,group_sales_manager,1,1,1,1
+access_ticketing_session_care,dke.ticketing.session.care,model_dke_ticketing_session,group_customer_care,1,1,1,0
+access_ticketing_session_manager,dke.ticketing.session.manager,model_dke_ticketing_session,group_sales_manager,1,1,1,1
 access_marketplace_integration_manager,dke.marketplace.integration.manager,model_dke_marketplace_integration,group_sales_manager,1,1,1,1
 access_marketplace_integration_staff,dke.marketplace.integration.staff,model_dke_marketplace_integration,group_sales_staff,1,0,0,0
 access_scheduled_message_staff,dke.scheduled.message.staff,model_dke_scheduled_message,group_sales_staff,1,1,1,1
@@ -21,6 +27,8 @@ access_support_ticket_manager,dke.support.ticket.manager,model_dke_support_ticke
 access_support_ticket_message_care,dke.support.ticket.message.care,model_dke_support_ticket_message,group_customer_care,1,1,1,0
 access_support_ticket_message_expert,dke.support.ticket.message.expert,model_dke_support_ticket_message,group_expert_staff,1,1,1,0
 access_support_ticket_message_manager,dke.support.ticket.message.manager,model_dke_support_ticket_message,group_sales_manager,1,1,1,1
+access_ticketing_monitoring_manager,dke.ticketing.monitoring.manager,model_dke_ticketing_monitoring,group_sales_manager,1,1,1,1
+access_ticketing_monitoring_care,dke.ticketing.monitoring.care,model_dke_ticketing_monitoring,group_customer_care,1,0,0,0
 access_chat_monitoring_manager,dke.chat.monitoring.manager,model_dke_chat_monitoring,group_sales_manager,1,1,1,1
 access_chat_monitoring_care,dke.chat.monitoring.care,model_dke_chat_monitoring,group_customer_care,1,0,0,0
 access_ticket_monitoring_manager,dke.ticket.monitoring.manager,model_dke_ticket_monitoring,group_sales_manager,1,1,1,1
@@ -40,3 +48,6 @@ access_faq_article_expert,dke.faq.article.expert,model_dke_faq_article,group_exp
 access_faq_article_manager,dke.faq.article.manager,model_dke_faq_article,group_sales_manager,1,1,1,1
 access_faq_article_version_expert,dke.faq.article.version.expert,model_dke_faq_article_version,group_expert_staff,1,0,0,0
 access_faq_article_version_manager,dke.faq.article.version.manager,model_dke_faq_article_version,group_sales_manager,1,1,1,1
+access_notification_care,dke.notification.care,model_dke_notification,group_customer_care,1,1,1,0
+access_notification_expert,dke.notification.expert,model_dke_notification,group_expert_staff,1,1,1,0
+access_notification_manager,dke.notification.manager,model_dke_notification,group_sales_manager,1,1,1,1

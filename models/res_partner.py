@@ -17,7 +17,7 @@ class ResPartner(models.Model):
     order_count = fields.Integer(string='Order Count')
 
     # Chat
-    chat_room_ids = fields.One2many('dke.chat.room', 'customer_id', string='Chat Rooms')
+    ticketing_room_ids = fields.One2many('dke.ticketing.room', 'customer_id', string='Ticketing Rooms')
 
     # Sentiment
     mood_score = fields.Float(string='Mood Score')

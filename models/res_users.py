@@ -20,15 +20,19 @@ class ResUsers(models.Model):
     ], string='DKE Status', default='active')
 
     dke_specialization = fields.Selection([
-        ('teknis', 'Teknis'),
-        ('produk', 'Produk'),
-        ('pengiriman', 'Pengiriman'),
+        ('face_wash', 'Face Wash'),
+        ('serum', 'Serum'),
+        ('lotion', 'Lotion'),
+        ('toner', 'Toner'),
     ], string='Specialization')
 
     dke_phone = fields.Char(string='DKE Phone')
+    dke_deleted = fields.Boolean(string='Soft Deleted', default=False)
 
     # Performance stats (computed — to be implemented)
     avg_response_time = fields.Float(string='Avg Response Time (min)')
+    avg_resolution_time = fields.Float(string='Avg Resolution Time (hours)')
     avg_rating = fields.Float(string='Avg Customer Rating')
     total_chats_handled = fields.Integer(string='Total Chats Handled')
     total_tickets_resolved = fields.Integer(string='Total Tickets Resolved')
+    total_messages_sent = fields.Integer(string='Total Messages Sent')

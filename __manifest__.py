@@ -42,6 +42,8 @@ Key Features:
         # Views
         'views/chat_room_views.xml',
         'views/chat_message_views.xml',
+        'views/ticketing_room_views.xml',
+        'views/ticketing_message_views.xml',
         'views/marketing_campaign_views.xml',
         'views/customer_segment_views.xml',
         'views/sale_transaction_views.xml',

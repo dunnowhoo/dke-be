@@ -2,12 +2,23 @@
 <odoo>
 
     <!-- ============================================================ -->
+    <!-- Sequences                                                     -->
+    <!-- ============================================================ -->
+    <record id="seq_ticketing_session" model="ir.sequence">
+        <field name="name">Ticketing Session Sequence</field>
+        <field name="code">dke.ticketing.session</field>
+        <field name="prefix">SES/</field>
+        <field name="padding">4</field>
+        <field name="number_increment">1</field>
+    </record>
+
+    <!-- ============================================================ -->
     <!-- Cron Jobs                                                     -->
     <!-- ============================================================ -->
 
-    <!-- Cron: Sync marketplace chat messages (every 5 minutes) -->
+    <!-- Cron: Sync marketplace Ticketing Messages (every 5 minutes) -->
     <record id="ir_cron_sync_marketplace_chat" model="ir.cron">
-        <field name="name">DKE: Sync Marketplace Chat Messages</field>
+        <field name="name">DKE: Sync Marketplace Ticketing Messages</field>
         <field name="model_id" ref="model_dke_marketplace_integration"/>
         <field name="interval_number">5</field>
         <field name="interval_type">minutes</field>

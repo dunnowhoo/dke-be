@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Ticketing Message Tree View -->
+    <record id="dke_ticketing_message_view_tree" model="ir.ui.view">
+        <field name="name">dke.ticketing.message.tree</field>
+        <field name="model">dke.ticketing.message</field>
+        <field name="arch" type="xml">
+            <tree string="Ticketing Messages">
+                <field name="room_id"/>
+                <field name="sender_type"/>
+                <field name="content_text"/>
+                <field name="message_type"/>
+                <field name="is_read"/>
+                <field name="send_status"/>
+                <field name="created_at"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Ticketing Message Form View -->
+    <record id="dke_ticketing_message_view_form" model="ir.ui.view">
+        <field name="name">dke.ticketing.message.form</field>
+        <field name="model">dke.ticketing.message</field>
+        <field name="arch" type="xml">
+            <form string="Ticketing Message">
+                <sheet>
+                    <group>
+                        <group>
+                            <field name="room_id"/>
+                            <field name="sender_type"/>
+                            <field name="sender_id"/>
+                            <field name="message_type"/>
+                        </group>
+                        <group>
+                            <field name="external_message_id"/>
+                            <field name="is_read"/>
+                            <field name="is_automated"/>
+                            <field name="send_status"/>
+                            <field name="created_at"/>
+                        </group>
+                    </group>
+                    <group>
+                        <field name="content_text"/>
+                        <field name="attachment_url"/>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+</odoo>

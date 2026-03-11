@@ -18,6 +18,7 @@ from odoo.exceptions import UserError, ValidationError
 _logger = logging.getLogger(__name__)
 
 
+
 class IntegrationController(http.Controller):
     """REST API endpoints for Marketplace (Shopee) & WhatsApp integration.
 
@@ -112,6 +113,42 @@ class IntegrationController(http.Controller):
         BASE_URL_SANDBOX = "https://partner.test-stable.shopeemobile.com"
         BASE_URL_PROD    = "https://partner.shopeemobile.com"
         base_url = BASE_URL_SANDBOX if is_sandbox else BASE_URL_PROD
+
+        # ── Validasi credentials ke Shopee sebelum redirect ──────
+        # Hit /api/v2/public/get_shops_by_partner yang hanya butuh partner auth.
+        # Kalau partner_id / partner_key salah, Shopee return error dan kita
+        # langsung kembalikan pesan ke FE tanpa pernah redirect user.
+        validate_path = "/api/v2/public/get_shops_by_partner"
+        ts_validate   = int(time.time())
+        sign_validate = self._shopee_sign_auth(partner_id, partner_key, validate_path, ts_validate)
+        try:
+            validate_resp = requests.get(
+                f"{base_url}{validate_path}",
+                params={
+                    "partner_id": partner_id,
+                    "timestamp":  ts_validate,
+                    "sign":       sign_validate,
+                    "page_size":  1,
+                    "page_no":    1,
+                },
+                timeout=10,
+            )
+            validate_data = validate_resp.json()
+        except Exception as exc:
+            _logger.warning("[Shopee OAuth] Gagal menghubungi Shopee untuk validasi: %s", exc)
+            return {
+                "status": "error",
+                "message": "Tidak dapat menghubungi Shopee. Periksa koneksi internet atau coba lagi.",
+            }
+
+        shopee_error = validate_data.get("error", "")
+        if shopee_error and shopee_error not in ("", "error_not_found"):
+            # error_not_found = partner valid tapi belum punya shop → tetap lanjut
+            _logger.warning("[Shopee OAuth] Validasi credentials gagal: %s", validate_data)
+            return {
+                "status": "error",
+                "message": f"Partner ID atau Partner Key tidak valid: {validate_data.get('message', shopee_error)}",
+            }
 
         # ── Generate HMAC-SHA256 sign & auth URL ─────────────────
         path = "/api/v2/shop/auth_partner"
@@ -530,8 +567,8 @@ class IntegrationController(http.Controller):
         EPIC02 - PBI-7 business rules:
         - Deduplicate by WhatsApp message_id.
         - Find or create res.partner by phone.
-        - Find or create dke.chat.room (per phone, source=whatsapp).
-        - Create dke.chat.message.
+        - Find or create dke.ticketing.room (per phone, source=whatsapp).
+        - Create dke.ticketing.message.
         - Update dke.whatsapp.config.last_sync_time.
         """
         wa_message_id = msg.get('id', '')
@@ -543,7 +580,7 @@ class IntegrationController(http.Controller):
             return
 
         # ── 1. Deduplicate ──────────────────────────────────────
-        already_exists = request.env['dke.chat.message'].sudo().search_count([
+        already_exists = request.env['dke.ticketing.message'].sudo().search_count([
             ('external_message_id', '=', wa_message_id)
         ])
         if already_exists:
@@ -566,7 +603,7 @@ class IntegrationController(http.Controller):
         else:
             content = f'[{msg_type}]'
 
-        # Normalise to dke.chat.message.message_type selection values
+        # Normalise to dke.ticketing.message.message_type selection values
         if msg_type not in ('text', 'image'):
             stored_type = 'file'
         else:
@@ -589,13 +626,13 @@ class IntegrationController(http.Controller):
                 'phone': phone,
             })
 
-        # ── 5. Find or create dke.chat.room ────────────────────
-        chat_room = request.env['dke.chat.room'].sudo().search([
+        # ── 5. Find or create dke.ticketing.room ────────────────────
+        ticketing_room = request.env['dke.ticketing.room'].sudo().search([
             ('external_conversation_id', '=', phone),
             ('source', '=', 'whatsapp'),
         ], limit=1)
-        if not chat_room:
-            chat_room = request.env['dke.chat.room'].sudo().create({
+        if not ticketing_room:
+            ticketing_room = request.env['dke.ticketing.room'].sudo().create({
                 'name': f'WA: {customer_name} ({phone})',
                 'customer_name': customer_name,
                 'customer_id': partner.id,
@@ -606,8 +643,8 @@ class IntegrationController(http.Controller):
             })
         else:
             # Update name if it was previously just the phone number
-            if chat_room.customer_name == phone and customer_name != phone:
-                chat_room.sudo().write({'customer_name': customer_name})
+            if ticketing_room.customer_name == phone and customer_name != phone:
+                ticketing_room.sudo().write({'customer_name': customer_name})
 
         # ── 6. Parse timestamp ──────────────────────────────────
         try:
@@ -615,9 +652,9 @@ class IntegrationController(http.Controller):
         except (ValueError, TypeError):
             msg_time = fields.Datetime.now()
 
-        # ── 7. Create dke.chat.message ──────────────────────────
-        request.env['dke.chat.message'].sudo().create({
-            'room_id': chat_room.id,
+        # ── 7. Create dke.ticketing.message ──────────────────────────
+        request.env['dke.ticketing.message'].sudo().create({
+            'room_id': ticketing_room.id,
             'external_message_id': wa_message_id,
             'sender_type': 'customer',
             'content_text': content,
@@ -626,8 +663,8 @@ class IntegrationController(http.Controller):
             'created_at': msg_time,
         })
 
-        # ── 8. Update chat_room last_message_time ───────────────
-        chat_room.sudo().write({'last_message_time': msg_time})
+        # ── 8. Update ticketing_room last_message_time ───────────────
+        ticketing_room.sudo().write({'last_message_time': msg_time})
 
         # ── 9. Post to Discuss (mail.thread) for Odoo inbox ────
         try:
@@ -641,7 +678,7 @@ class IntegrationController(http.Controller):
 
         _logger.info(
             "WhatsApp: saved message %s from %s (room=%s)",
-            wa_message_id, phone, chat_room.id,
+            wa_message_id, phone, ticketing_room.id,
         )
 
     # ── Config Endpoints (bridged to Odoo whatsapp.account) ──────

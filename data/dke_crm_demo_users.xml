@@ -14,8 +14,6 @@
         <!-- ======================================================== -->
         <!-- 1. Admin (uses Odoo's built-in admin user — just update)  -->
         <!-- ======================================================== -->
-        <!-- The default "admin" user (id=2) is already created by Odoo.
-             We only ensure the DKE fields are populated. -->
         <record id="base.user_admin" model="res.users">
             <field name="dke_status">active</field>
             <field name="dke_phone">08100000000</field>
@@ -66,7 +64,7 @@
             <field name="dke_role">expert_staff</field>
             <field name="dke_status">active</field>
             <field name="dke_phone">08133333333</field>
-            <field name="dke_specialization">teknis</field>
+            <field name="dke_specialization">face_wash</field>
             <field name="groups_id" eval="[(6, 0, [
                 ref('base.group_user'),
                 ref('dke_crm.group_expert_staff'),

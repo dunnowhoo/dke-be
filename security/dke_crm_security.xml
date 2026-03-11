@@ -18,7 +18,7 @@
         <field name="name">Customer Care</field>
         <field name="category_id" ref="module_category_dke_crm"/>
         <field name="comment">
-            Customer Care staff who handle customer chats and create support tickets.
+            Customer Care staff who handle customer tickets and create support tickets.
         </field>
     </record>
 

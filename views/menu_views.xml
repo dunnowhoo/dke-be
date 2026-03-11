@@ -12,12 +12,26 @@
               web_icon="dke_crm,static/description/icon.png"/>
 
     <!-- ============================================================ -->
-    <!-- Chat Menu (EPIC01, EPIC02)                                    -->
+    <!-- Ticketing Menu (EPIC01, EPIC02)                                    -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_ticketing"
+              name="Ticketing"
+              parent="menu_dke_crm_root"
+              sequence="10"/>
+
+    <menuitem id="menu_dke_ticketing_rooms"
+              name="Ticketing Rooms"
+              parent="menu_dke_ticketing"
+              action="action_dke_ticketing_room"
+              sequence="10"/>
+
+    <!-- ============================================================ -->
+    <!-- Chat Menu (from PBI-fauzan)                                   -->
     <!-- ============================================================ -->
     <menuitem id="menu_dke_chat"
               name="Chat"
               parent="menu_dke_crm_root"
-              sequence="10"/>
+              sequence="15"/>
 
     <menuitem id="menu_dke_chat_rooms"
               name="Chat Rooms"
@@ -81,10 +95,10 @@
               parent="menu_dke_crm_root"
               sequence="50"/>
 
-    <menuitem id="menu_dke_chat_monitoring"
-              name="Chat Performance"
+    <menuitem id="menu_dke_support_ticketing_monitoring"
+              name="Ticketing Performance"
               parent="menu_dke_monitoring"
-              action="action_dke_chat_monitoring"
+              action="action_dke_support_ticketing_monitoring"
               sequence="10"/>
 
     <menuitem id="menu_dke_ticket_monitoring"
