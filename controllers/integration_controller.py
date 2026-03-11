@@ -744,7 +744,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/status',
-        type='http', auth='none', methods=['GET'], csrf=False, cors='*',
+        type='http', auth='none', methods=['GET', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_status(self, **kwargs):
         """GET /api/integration/whatsapp/status — Cek status koneksi.
@@ -765,7 +765,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         ['/api/integration/whatsapp/auth', '/api/integration/whatsapp/config'],
-        type='http', auth='none', methods=['POST', 'PUT'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST', 'PUT', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_auth(self, **kwargs):
         """POST|PUT /api/integration/whatsapp/auth — Save & validate config.
@@ -786,43 +786,50 @@ class IntegrationController(http.Controller):
             token = (body.get('api_token') or '').strip()
             name = (body.get('name') or 'DKE WhatsApp').strip()
 
-            # --- Look for active account first ---
+            # --- Look for an account with this EXACT phone_uid (could be archived) ---
             WA = request.env['whatsapp.account'].sudo()
-            account = WA.search([('active', '=', True)], limit=1)
+            existing_by_phone = None
+            if phone_number_id:
+                existing_by_phone = WA.with_context(active_test=False).search(
+                    [('phone_uid', '=', phone_number_id)], limit=1
+                )
 
-            if account:
-                # ── UPDATE existing active account ──
-                vals = {}
-                if name:             vals['name'] = name
-                if app_id:           vals['app_uid'] = app_id
-                if app_secret:       vals['app_secret'] = app_secret
-                if account_id:       vals['account_uid'] = account_id
-                if phone_number_id:  vals['phone_uid'] = phone_number_id
-                if token:            vals['token'] = token
-                if vals:
-                    account.write(vals)
+            # --- Look for the currently active account ---
+            active_account = WA.search([('active', '=', True)], limit=1)
+
+            account = None
+
+            if existing_by_phone:
+                # An account (active or archived) with this exact phone number ALREADY EXISTS
+                vals = {'active': True}
+                if name: vals['name'] = name
+                if app_id: vals['app_uid'] = app_id
+                if app_secret: vals['app_secret'] = app_secret
+                if account_id: vals['account_uid'] = account_id
+                if token: vals['token'] = token
+                existing_by_phone.write(vals)
+                account = existing_by_phone
+
+                # If there was a DIFFERENT active account, we archive it
+                if active_account and active_account.id != existing_by_phone.id:
+                    active_account.write({'active': False})
             else:
-                # ── Check if an archived account with same phone_uid exists ──
-                archived = None
-                if phone_number_id:
-                    archived = WA.with_context(active_test=False).search(
-                        [('active', '=', False), ('phone_uid', '=', phone_number_id)],
-                        limit=1,
-                    )
+                # NO account with this phone number exists.
+                # So we can safely update the existing active account, OR create a new one.
+                vals = {}
+                if name: vals['name'] = name
+                if app_id: vals['app_uid'] = app_id
+                if app_secret: vals['app_secret'] = app_secret
+                if account_id: vals['account_uid'] = account_id
+                vals['phone_uid'] = phone_number_id
+                if token: vals['token'] = token
 
-                if archived:
-                    # Re-activate the archived account and update credentials
-                    vals = {'active': True}
-                    if name:             vals['name'] = name
-                    if app_id:           vals['app_uid'] = app_id
-                    if app_secret:       vals['app_secret'] = app_secret
-                    if account_id:       vals['account_uid'] = account_id
-                    if token:            vals['token'] = token
-                    archived.write(vals)
-                    account = archived
+                if active_account:
+                    # Update current active account (this is safe because phone_uid is not duplicated)
+                    active_account.write(vals)
+                    account = active_account
                 else:
-                    # ── CREATE brand-new account ──
-                    # Validate all fields are present for new creation
+                    # We have NO accounts with this number, and NO active accounts at all -> CREATE
                     missing = []
                     if not app_id:           missing.append('App ID')
                     if not app_secret:       missing.append('App Secret')
@@ -849,7 +856,8 @@ class IntegrationController(http.Controller):
             try:
                 account.button_test_connection()
             except Exception as conn_err:
-                err_msg = str(conn_err).strip()
+                err_msg = conn_err.args[0] if getattr(conn_err, 'args', None) else str(conn_err)
+                err_msg = str(err_msg).strip()
                 _logger.warning('whatsapp_auth test failed: %s', err_msg)
                 # Still keep the record but inform FE the test failed
                 return request.make_json_response({
@@ -875,7 +883,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/test',
-        type='http', auth='none', methods=['POST'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_test(self, **kwargs):
         """POST /api/integration/whatsapp/test — Test koneksi.
@@ -894,9 +902,10 @@ class IntegrationController(http.Controller):
             try:
                 account.button_test_connection()
             except Exception as conn_err:
-                err_msg = str(conn_err).strip()
+                err_msg = conn_err.args[0] if getattr(conn_err, 'args', None) else str(conn_err)
+                err_msg = str(err_msg).strip()
                 return request.make_json_response(
-                    {'status': 'error', 'message': err_msg or 'Koneksi gagal.'}, status=400,
+                    {'status': 'error', 'message': err_msg or 'Koneksi gagal log ke Meta.'}, status=400,
                 )
             return request.make_json_response({
                 'status': 'success',
@@ -911,7 +920,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/disconnect',
-        type='http', auth='none', methods=['POST'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_disconnect(self, **kwargs):
         """POST /api/integration/whatsapp/disconnect — Putuskan koneksi.
@@ -935,7 +944,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/sync',
-        type='http', auth='none', methods=['GET'], csrf=False, cors='*',
+        type='http', auth='none', methods=['GET', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_sync(self, **kwargs):
         """GET /api/integration/whatsapp/sync — Sinkronisasi template.
@@ -954,7 +963,8 @@ class IntegrationController(http.Controller):
             try:
                 account.button_sync_whatsapp_account_templates()
             except Exception as sync_err:
-                err_msg = str(sync_err).strip()
+                err_msg = sync_err.args[0] if getattr(sync_err, 'args', None) else str(sync_err)
+                err_msg = str(err_msg).strip()
                 return request.make_json_response(
                     {'status': 'error', 'message': err_msg or 'Gagal sinkronisasi.'}, status=400,
                 )
