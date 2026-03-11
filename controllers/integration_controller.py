@@ -684,10 +684,19 @@ class IntegrationController(http.Controller):
     # ── Config Endpoints (bridged to Odoo whatsapp.account) ──────
 
     @staticmethod
+    def _is_connected(account):
+        """True if account exists and has a non-empty token."""
+        return bool(account and account.token)
+
+    @staticmethod
     def _account_to_dict(account):
-        """Serialize whatsapp.account to API-safe dict."""
+        """Serialize whatsapp.account to API-safe dict.
+
+        whatsapp.account has no 'state' field — we derive it from token presence.
+        """
+        connected = bool(account.token)
         return {
-            'state': 'connected',
+            'state': 'connected' if connected else 'disconnected',
             'name': account.name or '',
             'app_id': account.app_uid or '',
             'account_id': account.account_uid or '',
@@ -798,12 +807,18 @@ class IntegrationController(http.Controller):
             else:
                 account = request.env['whatsapp.account'].sudo().create(vals)
 
-            # Test connection via Odoo WhatsApp addon
+            # Test connection via Odoo WhatsApp addon.
+            # button_test_connection raises UserError / ValidationError with Meta's message,
+            # but may also raise broader exceptions (requests.exceptions, etc.).
+            # We treat *any* exception from this call as a 400 (bad credentials).
             try:
                 account.button_test_connection()
-            except (UserError, ValidationError) as ve:
+            except Exception as conn_err:
+                err_msg = str(conn_err)
+                # Strip Odoo's UserError wrapper if present (it adds "\n" prefix)
+                err_msg = err_msg.strip()
                 return request.make_json_response(
-                    {'status': 'error', 'message': str(ve)}, status=400,
+                    {'status': 'error', 'message': err_msg or 'Kredensial WhatsApp tidak valid.'}, status=400,
                 )
 
             return request.make_json_response({
@@ -841,9 +856,10 @@ class IntegrationController(http.Controller):
                 )
             try:
                 account.button_test_connection()
-            except (UserError, ValidationError) as ve:
+            except Exception as conn_err:
+                err_msg = str(conn_err).strip()
                 return request.make_json_response(
-                    {'status': 'error', 'message': str(ve)}, status=400,
+                    {'status': 'error', 'message': err_msg or 'Koneksi gagal.'}, status=400,
                 )
             return request.make_json_response({
                 'status': 'success',
