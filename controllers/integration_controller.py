@@ -771,7 +771,9 @@ class IntegrationController(http.Controller):
         """POST|PUT /api/integration/whatsapp/auth — Save & validate config.
 
         Body: { name, app_id, app_secret, account_id, phone_number_id, api_token }
-        Creates or updates Odoo whatsapp.account and tests connection.
+        Creates or updates Odoo whatsapp.account.
+        If a previously archived account with the same phone_uid exists, it will
+        be re-activated instead of creating a new one.
         """
         try:
             raw = request.httprequest.data
@@ -784,69 +786,77 @@ class IntegrationController(http.Controller):
             token = (body.get('api_token') or '').strip()
             name = (body.get('name') or 'DKE WhatsApp').strip()
 
-            # Validation — all five credential fields are required
-            missing = []
-            if not app_id:
-                missing.append('App ID')
-            if not app_secret:
-                missing.append('App Secret')
-            if not account_id:
-                missing.append('Account ID')
-            if not phone_number_id:
-                missing.append('Phone Number ID')
-            if not token:
-                missing.append('Access Token')
-
-            account = request.env['whatsapp.account'].sudo().search(
-                [('active', '=', True)], limit=1,
-            )
-
-            # For updates, only require fields that were actually sent
-            if account:
-                missing = []  # allow partial update
-
-            if missing:
-                return request.make_json_response(
-                    {'status': 'error', 'message': '%s wajib diisi.' % ', '.join(missing)},
-                    status=400,
-                )
-
-            vals = {}
-            if name:
-                vals['name'] = name
-            if app_id:
-                vals['app_uid'] = app_id
-            if app_secret:
-                vals['app_secret'] = app_secret
-            if account_id:
-                vals['account_uid'] = account_id
-            if phone_number_id:
-                vals['phone_uid'] = phone_number_id
-            if token:
-                vals['token'] = token
+            # --- Look for active account first ---
+            WA = request.env['whatsapp.account'].sudo()
+            account = WA.search([('active', '=', True)], limit=1)
 
             if account:
-                account.sudo().write(vals)
+                # ── UPDATE existing active account ──
+                vals = {}
+                if name:             vals['name'] = name
+                if app_id:           vals['app_uid'] = app_id
+                if app_secret:       vals['app_secret'] = app_secret
+                if account_id:       vals['account_uid'] = account_id
+                if phone_number_id:  vals['phone_uid'] = phone_number_id
+                if token:            vals['token'] = token
+                if vals:
+                    account.write(vals)
             else:
-                # notify_user_ids is required by Odoo's whatsapp.account model.
-                # Use the current uid if a valid session exists, else admin (uid=2).
-                current_uid = request.env.uid or 2
-                vals['notify_user_ids'] = [(4, current_uid)]
-                account = request.env['whatsapp.account'].sudo().create(vals)
+                # ── Check if an archived account with same phone_uid exists ──
+                archived = None
+                if phone_number_id:
+                    archived = WA.with_context(active_test=False).search(
+                        [('active', '=', False), ('phone_uid', '=', phone_number_id)],
+                        limit=1,
+                    )
 
-            # Test connection via Odoo WhatsApp addon.
-            # button_test_connection raises UserError / ValidationError with Meta's message,
-            # but may also raise broader exceptions (requests.exceptions, etc.).
-            # We treat *any* exception from this call as a 400 (bad credentials).
+                if archived:
+                    # Re-activate the archived account and update credentials
+                    vals = {'active': True}
+                    if name:             vals['name'] = name
+                    if app_id:           vals['app_uid'] = app_id
+                    if app_secret:       vals['app_secret'] = app_secret
+                    if account_id:       vals['account_uid'] = account_id
+                    if token:            vals['token'] = token
+                    archived.write(vals)
+                    account = archived
+                else:
+                    # ── CREATE brand-new account ──
+                    # Validate all fields are present for new creation
+                    missing = []
+                    if not app_id:           missing.append('App ID')
+                    if not app_secret:       missing.append('App Secret')
+                    if not account_id:       missing.append('Account ID')
+                    if not phone_number_id:  missing.append('Phone Number ID')
+                    if not token:            missing.append('Access Token')
+                    if missing:
+                        return request.make_json_response(
+                            {'status': 'error', 'message': '%s wajib diisi.' % ', '.join(missing)},
+                            status=400,
+                        )
+                    current_uid = request.env.uid or 2
+                    account = WA.create({
+                        'name': name,
+                        'app_uid': app_id,
+                        'app_secret': app_secret,
+                        'account_uid': account_id,
+                        'phone_uid': phone_number_id,
+                        'token': token,
+                        'notify_user_ids': [(4, current_uid)],
+                    })
+
+            # Test connection via Meta API
             try:
                 account.button_test_connection()
             except Exception as conn_err:
-                err_msg = str(conn_err)
-                # Strip Odoo's UserError wrapper if present (it adds "\n" prefix)
-                err_msg = err_msg.strip()
-                return request.make_json_response(
-                    {'status': 'error', 'message': err_msg or 'Kredensial WhatsApp tidak valid.'}, status=400,
-                )
+                err_msg = str(conn_err).strip()
+                _logger.warning('whatsapp_auth test failed: %s', err_msg)
+                # Still keep the record but inform FE the test failed
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': err_msg or 'Kredensial WhatsApp tidak valid.',
+                    'data': self._account_to_dict(account),
+                }, status=400)
 
             return request.make_json_response({
                 'status': 'success',
@@ -943,9 +953,10 @@ class IntegrationController(http.Controller):
                 )
             try:
                 account.button_sync_whatsapp_account_templates()
-            except (UserError, ValidationError) as ve:
+            except Exception as sync_err:
+                err_msg = str(sync_err).strip()
                 return request.make_json_response(
-                    {'status': 'error', 'message': str(ve)}, status=400,
+                    {'status': 'error', 'message': err_msg or 'Gagal sinkronisasi.'}, status=400,
                 )
             return request.make_json_response({
                 'status': 'success',
