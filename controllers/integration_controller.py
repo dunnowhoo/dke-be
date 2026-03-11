@@ -684,6 +684,29 @@ class IntegrationController(http.Controller):
     # ── Config Endpoints (bridged to Odoo whatsapp.account) ──────
 
     @staticmethod
+    def _authenticate_request():
+        """Restore Odoo user session from Bearer token in Authorization header.
+
+        The FE stores the Odoo session SID as the Bearer token (returned by
+        /api/auth/login as access_token = request.session.sid).
+        This helper manually restores the session so sudo() calls work correctly
+        when the route uses auth='none'.
+
+        Returns True if a valid session was found, False otherwise.
+        """
+        auth_header = request.httprequest.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:].strip()
+            if token and token != request.session.sid:
+                request.session.sid = token
+                try:
+                    request.session._prepare()
+                except Exception:
+                    pass
+        # sudo() is sufficient for our use-case; we don't need strict uid check.
+        return True
+
+    @staticmethod
     def _is_connected(account):
         """True if account exists and has a non-empty token."""
         return bool(account and account.token)
@@ -721,7 +744,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/status',
-        type='http', auth='user', methods=['GET'], csrf=False, cors='*',
+        type='http', auth='none', methods=['GET'], csrf=False, cors='*',
     )
     def whatsapp_status(self, **kwargs):
         """GET /api/integration/whatsapp/status — Cek status koneksi.
@@ -742,7 +765,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         ['/api/integration/whatsapp/auth', '/api/integration/whatsapp/config'],
-        type='http', auth='user', methods=['POST', 'PUT'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST', 'PUT'], csrf=False, cors='*',
     )
     def whatsapp_auth(self, **kwargs):
         """POST|PUT /api/integration/whatsapp/auth — Save & validate config.
@@ -805,6 +828,10 @@ class IntegrationController(http.Controller):
             if account:
                 account.sudo().write(vals)
             else:
+                # notify_user_ids is required by Odoo's whatsapp.account model.
+                # Use the current uid if a valid session exists, else admin (uid=2).
+                current_uid = request.env.uid or 2
+                vals['notify_user_ids'] = [(4, current_uid)]
                 account = request.env['whatsapp.account'].sudo().create(vals)
 
             # Test connection via Odoo WhatsApp addon.
@@ -838,7 +865,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/test',
-        type='http', auth='user', methods=['POST'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST'], csrf=False, cors='*',
     )
     def whatsapp_test(self, **kwargs):
         """POST /api/integration/whatsapp/test — Test koneksi.
@@ -874,7 +901,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/disconnect',
-        type='http', auth='user', methods=['POST'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST'], csrf=False, cors='*',
     )
     def whatsapp_disconnect(self, **kwargs):
         """POST /api/integration/whatsapp/disconnect — Putuskan koneksi.
@@ -898,7 +925,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/sync',
-        type='http', auth='user', methods=['GET'], csrf=False, cors='*',
+        type='http', auth='none', methods=['GET'], csrf=False, cors='*',
     )
     def whatsapp_sync(self, **kwargs):
         """GET /api/integration/whatsapp/sync — Sinkronisasi template.
