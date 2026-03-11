@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ============================================================ -->
+    <!-- Main Menu                                                     -->
+    <!-- ============================================================ -->
+
+    <!-- Root Menu -->
+    <menuitem id="menu_dke_crm_root"
+              name="DKE Smart Sales"
+              sequence="10"
+              web_icon="dke_crm,static/description/icon.png"/>
+
+    <!-- ============================================================ -->
+    <!-- Ticketing Menu (EPIC01, EPIC02)                                    -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_ticketing"
+              name="Ticketing"
+              parent="menu_dke_crm_root"
+              sequence="10"/>
+
+    <menuitem id="menu_dke_ticketing_rooms"
+              name="Ticketing Rooms"
+              parent="menu_dke_ticketing"
+              action="action_dke_ticketing_room"
+              sequence="10"/>
+
+    <!-- ============================================================ -->
+    <!-- Chat Menu (from PBI-fauzan)                                   -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_chat"
+              name="Chat"
+              parent="menu_dke_crm_root"
+              sequence="15"/>
+
+    <menuitem id="menu_dke_chat_rooms"
+              name="Chat Rooms"
+              parent="menu_dke_chat"
+              action="action_dke_chat_room"
+              sequence="10"/>
+
+    <!-- ============================================================ -->
+    <!-- Marketing Menu (EPIC03)                                       -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_marketing"
+              name="Marketing"
+              parent="menu_dke_crm_root"
+              sequence="20"/>
+
+    <menuitem id="menu_dke_marketing_campaigns"
+              name="Campaigns"
+              parent="menu_dke_marketing"
+              action="action_dke_marketing_campaign"
+              sequence="10"/>
+
+    <menuitem id="menu_dke_customer_segments"
+              name="Customer Segments"
+              parent="menu_dke_marketing"
+              action="action_dke_customer_segment"
+              sequence="20"/>
+
+    <!-- ============================================================ -->
+    <!-- Sales Menu (EPIC04)                                           -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_sales"
+              name="Sales"
+              parent="menu_dke_crm_root"
+              sequence="30"/>
+
+    <menuitem id="menu_dke_sale_transactions"
+              name="Marketplace Transactions"
+              parent="menu_dke_sales"
+              action="action_dke_sale_transaction"
+              sequence="10"/>
+
+    <!-- ============================================================ -->
+    <!-- Support Menu (EPIC06)                                         -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_support"
+              name="Support"
+              parent="menu_dke_crm_root"
+              sequence="40"/>
+
+    <menuitem id="menu_dke_support_tickets"
+              name="Support Tickets"
+              parent="menu_dke_support"
+              action="action_dke_support_ticket"
+              sequence="10"/>
+
+    <!-- ============================================================ -->
+    <!-- Monitoring Menu (EPIC07, EPIC08, EPIC09)                      -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_monitoring"
+              name="Monitoring &amp; Dashboard"
+              parent="menu_dke_crm_root"
+              sequence="50"/>
+
+    <menuitem id="menu_dke_support_ticketing_monitoring"
+              name="Ticketing Performance"
+              parent="menu_dke_monitoring"
+              action="action_dke_support_ticketing_monitoring"
+              sequence="10"/>
+
+    <menuitem id="menu_dke_ticket_monitoring"
+              name="Ticket Performance"
+              parent="menu_dke_monitoring"
+              action="action_dke_ticket_monitoring"
+              sequence="20"/>
+
+    <!-- ============================================================ -->
+    <!-- Configuration Menu                                            -->
+    <!-- ============================================================ -->
+    <menuitem id="menu_dke_config"
+              name="Configuration"
+              parent="menu_dke_crm_root"
+              sequence="90"/>
+
+</odoo>

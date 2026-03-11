@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+        Cron job: Sinkronisasi order Shopee secara berkala.
+        Memanggil ShopeeConfig.cron_sync_orders() yang mendelegasikan ke
+        ShopeeDataService.sync_orders_to_db().
+
+        Untuk environment DEV (dummy data):
+          - interval_number = 8 jam (bisa diubah di Settings > Technical > Automation > Scheduled Actions)
+
+        Untuk environment PROD (live Shopee API):
+          1. Set ShopeeDataService._use_dummy = False di services/shopee_service.py
+          2. Isi ShopeeConfig (shop_id, partner_id, partner_key, access_token) via UI
+          3. Interval bisa diperpendek sesuai kebutuhan
+    -->
+    <record id="ir_cron_shopee_sync_orders" model="ir.cron">
+        <field name="name">Shopee: Sinkronisasi Order</field>
+        <field name="model_id" ref="model_shopee_config"/>
+        <field name="state">code</field>
+        <field name="code">model.cron_sync_orders()</field>
+        <field name="interval_number">8</field>
+        <field name="interval_type">hours</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="True"/>
+        <field name="priority">10</field>
+        <field name="user_id" ref="base.user_root"/>
+    </record>
+</odoo>

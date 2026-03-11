@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Support Ticket Tree View -->
+    <record id="dke_support_ticket_view_tree" model="ir.ui.view">
+        <field name="name">dke.support.ticket.tree</field>
+        <field name="model">dke.support.ticket</field>
+        <field name="arch" type="xml">
+            <tree string="Support Tickets"
+                  decoration-danger="is_overdue == True"
+                  decoration-info="state == 'open'"
+                  decoration-success="state == 'resolved'">
+                <field name="name"/>
+                <field name="subject"/>
+                <field name="customer_id"/>
+                <field name="created_by_id"/>
+                <field name="assigned_expert_id"/>
+                <field name="priority"/>
+                <field name="state"/>
+                <field name="is_overdue"/>
+                <field name="create_date"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Support Ticket Form View -->
+    <record id="dke_support_ticket_view_form" model="ir.ui.view">
+        <field name="name">dke.support.ticket.form</field>
+        <field name="model">dke.support.ticket</field>
+        <field name="arch" type="xml">
+            <form string="Support Ticket">
+                <header>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="open,in_progress,resolved,closed"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name"/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="subject"/>
+                            <field name="customer_id"/>
+                            <field name="room_id"/>
+                            <field name="priority"/>
+                        </group>
+                        <group>
+                            <field name="created_by_id"/>
+                            <field name="assigned_expert_id"/>
+                            <field name="sla_deadline"/>
+                            <field name="is_overdue"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Description">
+                            <field name="description" nolabel="1"/>
+                        </page>
+                        <page string="Internal Messages">
+                            <field name="ticket_message_ids">
+                                <tree>
+                                    <field name="sender_id"/>
+                                    <field name="content"/>
+                                    <field name="created_at"/>
+                                </tree>
+                            </field>
+                        </page>
+                        <page string="Timeline">
+                            <group>
+                                <field name="first_response_at"/>
+                                <field name="resolved_at"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Support Ticket Search View -->
+    <record id="dke_support_ticket_view_search" model="ir.ui.view">
+        <field name="name">dke.support.ticket.search</field>
+        <field name="model">dke.support.ticket</field>
+        <field name="arch" type="xml">
+            <search string="Search Tickets">
+                <field name="name"/>
+                <field name="subject"/>
+                <field name="customer_id"/>
+                <field name="assigned_expert_id"/>
+                <filter name="open" string="Open" domain="[('state', '=', 'open')]"/>
+                <filter name="overdue" string="Overdue" domain="[('is_overdue', '=', True)]"/>
+                <group string="Group By">
+                    <filter name="group_priority" string="Priority" context="{'group_by': 'priority'}"/>
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                    <filter name="group_expert" string="Expert Staff" context="{'group_by': 'assigned_expert_id'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Support Ticket Action -->
+    <record id="action_dke_support_ticket" model="ir.actions.act_window">
+        <field name="name">Support Tickets</field>
+        <field name="res_model">dke.support.ticket</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="dke_support_ticket_view_search"/>
+    </record>
+
+</odoo>

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- Marketing Campaign Tree View -->
+    <record id="dke_marketing_campaign_view_tree" model="ir.ui.view">
+        <field name="name">dke.marketing.campaign.tree</field>
+        <field name="model">dke.marketing.campaign</field>
+        <field name="arch" type="xml">
+            <tree string="Marketing Campaigns"
+                  decoration-info="state == 'draft'"
+                  decoration-warning="state == 'processing'"
+                  decoration-success="state == 'done'">
+                <field name="name"/>
+                <field name="product_id"/>
+                <field name="discount_type"/>
+                <field name="discount_value"/>
+                <field name="matched_count"/>
+                <field name="sent_count"/>
+                <field name="state"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- Marketing Campaign Form View -->
+    <record id="dke_marketing_campaign_view_form" model="ir.ui.view">
+        <field name="name">dke.marketing.campaign.form</field>
+        <field name="model">dke.marketing.campaign</field>
+        <field name="arch" type="xml">
+            <form string="Marketing Campaign">
+                <header>
+                    <field name="state" widget="statusbar"
+                           statusbar_visible="draft,targeted,processing,done"/>
+                </header>
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" placeholder="Campaign Title..."/></h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="product_id"/>
+                            <field name="discount_type"/>
+                            <field name="discount_value"/>
+                            <field name="created_by_id"/>
+                        </group>
+                        <group>
+                            <field name="segment_id"/>
+                            <field name="matched_count"/>
+                            <field name="sent_count"/>
+                            <field name="failed_count"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="Description">
+                            <field name="description" nolabel="1"
+                                   placeholder="Campaign description..."/>
+                        </page>
+                        <page string="Target Audience">
+                            <field name="target_audience_ids"/>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Marketing Campaign Search View -->
+    <record id="dke_marketing_campaign_view_search" model="ir.ui.view">
+        <field name="name">dke.marketing.campaign.search</field>
+        <field name="model">dke.marketing.campaign</field>
+        <field name="arch" type="xml">
+            <search string="Search Campaigns">
+                <field name="name"/>
+                <field name="product_id"/>
+                <filter name="draft" string="Draft" domain="[('state', '=', 'draft')]"/>
+                <filter name="done" string="Done" domain="[('state', '=', 'done')]"/>
+                <group string="Group By">
+                    <filter name="group_state" string="Status" context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Marketing Campaign Action -->
+    <record id="action_dke_marketing_campaign" model="ir.actions.act_window">
+        <field name="name">Marketing Campaigns</field>
+        <field name="res_model">dke.marketing.campaign</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="dke_marketing_campaign_view_search"/>
+    </record>
+
+</odoo>

@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+
+    <!-- ================================================================== -->
+    <!-- shopee.config — Form View                                           -->
+    <!-- ================================================================== -->
+    <record id="view_shopee_config_form" model="ir.ui.view">
+        <field name="name">shopee.config.form</field>
+        <field name="model">shopee.config</field>
+        <field name="arch" type="xml">
+            <form string="Shopee Integration">
+
+                <!-- ── Action Buttons ── -->
+                <header>
+                    <!-- Status badge -->
+                    <field name="connection_status" widget="badge"
+                           decoration-success="connection_status == 'connected'"
+                           decoration-warning="connection_status == 'expired'"
+                           decoration-danger="connection_status == 'disconnected'"
+                           readonly="1"/>
+                </header>
+
+                <sheet>
+                    <!-- ── Title ── -->
+                    <div class="oe_title">
+                        <h1>
+                            <field name="shop_name" placeholder="Nama Toko Shopee"/>
+                        </h1>
+                    </div>
+
+                    <!-- ── Connect / Disconnect / Sync Buttons ── -->
+                    <div class="o_row mb-3">
+                        <button name="action_connect_shopee"
+                                type="object"
+                                string="🔗 Connect Shopee"
+                                class="btn btn-primary"
+                                invisible="connection_status == 'connected'"/>
+                        <button name="action_disconnect_shopee"
+                                type="object"
+                                string="🔌 Disconnect"
+                                class="btn btn-danger"
+                                confirm="Apakah Anda yakin ingin memutuskan koneksi Shopee?"
+                                invisible="connection_status != 'connected'"/>
+                        <button name="action_manual_sync"
+                                type="object"
+                                string="🔄 Sync Orders Now"
+                                class="btn btn-secondary"
+                                invisible="connection_status != 'connected'"/>
+                    </div>
+
+                    <!-- ── Main Configuration ── -->
+                    <group string="Konfigurasi Toko">
+                        <group>
+                            <field name="shop_name" required="1"/>
+                            <field name="shop_id"
+                                   readonly="connection_status == 'connected'"/>
+                        </group>
+                        <group>
+                            <field name="is_sandbox" widget="boolean_toggle"/>
+                            <field name="use_dummy" widget="boolean_toggle"/>
+                            <field name="active" widget="boolean_toggle"/>
+                        </group>
+                    </group>
+
+                    <!-- ── Credentials ── -->
+                    <group string="Kredensial Shopee Partner">
+                        <group>
+                            <field name="partner_id"/>
+                            <field name="partner_key" password="True"/>
+                        </group>
+                        <group>
+                            <field name="redirect_url"
+                                   placeholder="http://localhost:8069/shopee/oauth/callback"/>
+                        </group>
+                    </group>
+
+                    <!-- ── Token Info ── -->
+                    <group string="Status Token">
+                        <group>
+                            <field name="access_token" password="True" readonly="1"/>
+                            <field name="refresh_token" password="True" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="token_expire_in" readonly="1"/>
+                            <field name="token_expire_at" readonly="1"/>
+                            <field name="last_sync" readonly="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ================================================================== -->
+    <!-- shopee.config — Tree View                                           -->
+    <!-- ================================================================== -->
+    <record id="view_shopee_config_tree" model="ir.ui.view">
+        <field name="name">shopee.config.tree</field>
+        <field name="model">shopee.config</field>
+        <field name="arch" type="xml">
+            <tree string="Shopee Configurations">
+                <field name="shop_name"/>
+                <field name="shop_id"/>
+                <field name="connection_status"
+                       decoration-success="connection_status == 'connected'"
+                       decoration-warning="connection_status == 'expired'"
+                       decoration-muted="connection_status == 'disconnected'"/>
+                <field name="is_sandbox" optional="show"/>
+                <field name="use_dummy" optional="show"/>
+                <field name="last_sync" optional="show"/>
+                <field name="active" optional="hide"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- ================================================================== -->
+    <!-- shopee.config — Window Action                                       -->
+    <!-- ================================================================== -->
+    <record id="action_shopee_config" model="ir.actions.act_window">
+        <field name="name">Shopee Integration</field>
+        <field name="res_model">shopee.config</field>
+        <field name="view_mode">form,tree</field>
+        <field name="view_id" ref="view_shopee_config_form"/>
+        <field name="target">current</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Belum ada konfigurasi Shopee.
+            </p>
+            <p>
+                Buat konfigurasi baru, isi Partner ID dan Partner Key,
+                lalu klik <b>Connect Shopee</b> untuk memulai OAuth.
+            </p>
+        </field>
+    </record>
+
+    <!-- ================================================================== -->
+    <!-- shopee.order — Tree View                                            -->
+    <!-- ================================================================== -->
+    <record id="view_shopee_order_tree" model="ir.ui.view">
+        <field name="name">shopee.order.tree</field>
+        <field name="model">shopee.order</field>
+        <field name="arch" type="xml">
+            <tree string="Shopee Orders" default_order="create_time desc">
+                <field name="order_sn"/>
+                <field name="order_status"
+                       decoration-success="order_status == 'COMPLETED'"
+                       decoration-info="order_status in ('READY_TO_SHIP', 'PROCESSED', 'SHIPPED')"
+                       decoration-warning="order_status == 'IN_CANCEL'"
+                       decoration-danger="order_status == 'CANCELLED'"
+                       decoration-muted="order_status == 'UNPAID'"/>
+                <field name="buyer_username"/>
+                <field name="total_amount"/>
+                <field name="currency" optional="hide"/>
+                <field name="shipping_carrier" optional="show"/>
+                <field name="tracking_number" optional="show"/>
+                <field name="recipient_city" optional="show"/>
+                <field name="create_time" optional="show"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- ================================================================== -->
+    <!-- shopee.order — Form View                                            -->
+    <!-- ================================================================== -->
+    <record id="view_shopee_order_form" model="ir.ui.view">
+        <field name="name">shopee.order.form</field>
+        <field name="model">shopee.order</field>
+        <field name="arch" type="xml">
+            <form string="Shopee Order" create="false" edit="false">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="order_sn" readonly="1"/></h1>
+                    </div>
+
+                    <group string="Status Order">
+                        <group>
+                            <field name="order_status" readonly="1"/>
+                            <field name="buyer_username" readonly="1"/>
+                            <field name="buyer_user_id" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="total_amount" readonly="1"/>
+                            <field name="currency" readonly="1"/>
+                            <field name="create_time" readonly="1"/>
+                            <field name="pay_time" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <group string="Pengiriman">
+                        <group>
+                            <field name="shipping_carrier" readonly="1"/>
+                            <field name="tracking_number" readonly="1"/>
+                            <field name="estimated_shipping_fee" readonly="1"/>
+                            <field name="actual_shipping_cost" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="recipient_name" readonly="1"/>
+                            <field name="recipient_phone" readonly="1"/>
+                            <field name="recipient_city" readonly="1"/>
+                            <field name="recipient_state" readonly="1"/>
+                            <field name="recipient_zipcode" readonly="1"/>
+                        </group>
+                    </group>
+
+                    <notebook>
+                        <!-- Items Tab -->
+                        <page string="Items">
+                            <field name="order_item_ids" readonly="1">
+                                <tree>
+                                    <field name="item_name"/>
+                                    <field name="item_sku" optional="show"/>
+                                    <field name="model_name" optional="show"/>
+                                    <field name="quantity_purchased"/>
+                                    <field name="original_price"/>
+                                    <field name="discounted_price"/>
+                                    <field name="subtotal"/>
+                                </tree>
+                            </field>
+                            <div class="oe_subtotal_footer">
+                                <field name="items_subtotal"/>
+                            </div>
+                        </page>
+
+                        <!-- Escrow Tab -->
+                        <page string="Escrow / Settlement">
+                            <field name="escrow_id" readonly="1">
+                                <form>
+                                    <group string="Pembayaran">
+                                        <group>
+                                            <field name="buyer_payment_amount"/>
+                                            <field name="actual_shipping_cost"/>
+                                            <field name="shopee_discount"/>
+                                            <field name="commission_fee"/>
+                                            <field name="service_fee"/>
+                                        </group>
+                                        <group>
+                                            <field name="seller_transaction_fee"/>
+                                            <field name="final_escrow_amount"/>
+                                            <field name="seller_income"/>
+                                            <field name="escrow_release_time"/>
+                                        </group>
+                                    </group>
+                                    <group string="Rekening Seller">
+                                        <field name="bank_account_type"/>
+                                        <field name="bank_account_number"/>
+                                        <field name="bank_account_name"/>
+                                    </group>
+                                </form>
+                            </field>
+                        </page>
+
+                        <!-- Misc Tab -->
+                        <page string="Lainnya">
+                            <group>
+                                <field name="note" readonly="1"/>
+                                <field name="dropshipper" readonly="1"/>
+                                <field name="recipient_full_address" readonly="1"/>
+                                <field name="update_time" readonly="1"/>
+                                <field name="config_id" readonly="1"/>
+                            </group>
+                        </page>
+                    </notebook>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- ================================================================== -->
+    <!-- shopee.order — Window Action                                        -->
+    <!-- ================================================================== -->
+    <record id="action_shopee_order" model="ir.actions.act_window">
+        <field name="name">Shopee Orders</field>
+        <field name="res_model">shopee.order</field>
+        <field name="view_mode">tree,form</field>
+        <field name="context">{}</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                Belum ada order Shopee.
+            </p>
+            <p>Klik <b>Sync Orders Now</b> di halaman konfigurasi untuk mengambil data.</p>
+        </field>
+    </record>
+
+    <!-- ================================================================== -->
+    <!-- Menu Items                                                          -->
+    <!-- ================================================================== -->
+
+    <!-- Shopee under Configuration menu -->
+    <menuitem id="menu_dke_shopee_integration"
+              name="Shopee Integration"
+              parent="base.menu_administration"
+              action="action_shopee_config"
+              sequence="10"/>
+
+    <!-- Shopee Orders under Sales menu -->
+    <menuitem id="menu_dke_shopee_orders"
+              name="Shopee Orders"
+              parent="sale.menu_sale_config"
+              action="action_shopee_order"
+              sequence="20"/>
+
+</odoo>
