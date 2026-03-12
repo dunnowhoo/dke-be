@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import html
 import json
 import datetime
 import logging
@@ -16,6 +17,7 @@ from odoo.http import request
 from odoo.exceptions import UserError, ValidationError
 
 _logger = logging.getLogger(__name__)
+
 
 
 class IntegrationController(http.Controller):
@@ -112,6 +114,42 @@ class IntegrationController(http.Controller):
         BASE_URL_SANDBOX = "https://partner.test-stable.shopeemobile.com"
         BASE_URL_PROD    = "https://partner.shopeemobile.com"
         base_url = BASE_URL_SANDBOX if is_sandbox else BASE_URL_PROD
+
+        # ── Validasi credentials ke Shopee sebelum redirect ──────
+        # Hit /api/v2/public/get_shops_by_partner yang hanya butuh partner auth.
+        # Kalau partner_id / partner_key salah, Shopee return error dan kita
+        # langsung kembalikan pesan ke FE tanpa pernah redirect user.
+        validate_path = "/api/v2/public/get_shops_by_partner"
+        ts_validate   = int(time.time())
+        sign_validate = self._shopee_sign_auth(partner_id, partner_key, validate_path, ts_validate)
+        try:
+            validate_resp = requests.get(
+                f"{base_url}{validate_path}",
+                params={
+                    "partner_id": partner_id,
+                    "timestamp":  ts_validate,
+                    "sign":       sign_validate,
+                    "page_size":  1,
+                    "page_no":    1,
+                },
+                timeout=10,
+            )
+            validate_data = validate_resp.json()
+        except Exception as exc:
+            _logger.warning("[Shopee OAuth] Gagal menghubungi Shopee untuk validasi: %s", exc)
+            return {
+                "status": "error",
+                "message": "Tidak dapat menghubungi Shopee. Periksa koneksi internet atau coba lagi.",
+            }
+
+        shopee_error = validate_data.get("error", "")
+        if shopee_error and shopee_error not in ("", "error_not_found"):
+            # error_not_found = partner valid tapi belum punya shop → tetap lanjut
+            _logger.warning("[Shopee OAuth] Validasi credentials gagal: %s", validate_data)
+            return {
+                "status": "error",
+                "message": f"Partner ID atau Partner Key tidak valid: {validate_data.get('message', shopee_error)}",
+            }
 
         # ── Generate HMAC-SHA256 sign & auth URL ─────────────────
         path = "/api/v2/shop/auth_partner"
@@ -228,7 +266,7 @@ class IntegrationController(http.Controller):
             "refresh_token":   data.get("refresh_token") or False,
             "token_expire_in": expire_in,
             "token_expire_at": ts_now + expire_in,
-            "shop_id":         shop_id,
+            "shop_id":         str(shop_id),
             "shop_name":       shop_name,
         })
 
@@ -304,7 +342,7 @@ class IntegrationController(http.Controller):
         except Exception as exc:
             _logger.exception("[Shopee OAuth] Error saat tukar code: %s", exc)
             return request.make_response(
-                f"<h2>OAuth Error</h2><p>Gagal menghubungi Shopee: {exc}</p>",
+                f"<h2>OAuth Error</h2><p>Gagal menghubungi Shopee: {html.escape(str(exc))}</p>",
                 headers=[("Content-Type", "text/html")],
                 status=500,
             )
@@ -314,7 +352,7 @@ class IntegrationController(http.Controller):
             error_msg = data.get("message", "Unknown error")
             _logger.error("[Shopee OAuth] Token exchange gagal: %s", data)
             return request.make_response(
-                f"<h2>OAuth Error</h2><p>Shopee mengembalikan error: {error_msg}</p>",
+                f"<h2>OAuth Error</h2><p>Shopee mengembalikan error: {html.escape(str(error_msg))}</p>",
                 headers=[("Content-Type", "text/html")],
                 status=400,
             )
@@ -325,7 +363,7 @@ class IntegrationController(http.Controller):
             "refresh_token": data.get("refresh_token") or False,
             "token_expire_in": expire_in,
             "token_expire_at": ts + expire_in,
-            "shop_id": int(shop_id),
+            "shop_id": str(shop_id),
             "shop_name": data.get("shop_name") or f"Shop {shop_id}",
         })
 

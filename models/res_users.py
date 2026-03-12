@@ -27,6 +27,7 @@ class ResUsers(models.Model):
     ], string='Specialization')
 
     dke_phone = fields.Char(string='DKE Phone')
+    dke_deleted = fields.Boolean(string='Soft Deleted', default=False)
 
     # ------------------------------------------------------------------ #
     # Performance stats — stored, refreshed by _recompute_expert_stats()  #
