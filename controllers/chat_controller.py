@@ -31,8 +31,12 @@ class ChatController(http.Controller):
 
     @staticmethod
     def _fmt_dt(dt):
-        """Return ISO-8601 string or None."""
-        return fields.Datetime.to_string(dt) if dt else None
+        """Return ISO-8601 string with Z suffix (Odoo stores UTC) or None."""
+        if not dt:
+            return None
+        s = fields.Datetime.to_string(dt)
+        # Append 'Z' so JS Date() treats it as UTC
+        return s + 'Z' if s and not s.endswith('Z') else s
 
     @staticmethod
     def _room_to_dict(room, include_preview=False):

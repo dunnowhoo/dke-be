@@ -25,7 +25,10 @@ class TicketingController(http.Controller):
 
     @staticmethod
     def _fmt_dt(dt):
-        return fields.Datetime.to_string(dt) if dt else None
+        if not dt:
+            return None
+        s = fields.Datetime.to_string(dt)
+        return s + 'Z' if s and not s.endswith('Z') else s
 
     @staticmethod
     def _room_to_dict(room):
