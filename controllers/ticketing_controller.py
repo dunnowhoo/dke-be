@@ -27,9 +27,16 @@ class TicketingController(http.Controller):
     def _fmt_dt(dt):
         return fields.Datetime.to_string(dt) if dt else None
 
+    SPECIALIZATION_LABELS = {
+        'face_wash': 'Face Wash',
+        'serum': 'Serum',
+        'lotion': 'Lotion',
+        'toner': 'Toner',
+    }
+
     @staticmethod
     def _room_to_dict(room):
-        """Unified room dict — mirrors TicketingRoom.to_dict() on the model."""
+        """Unified room dict — includes linked ticket info so the chat bubble title = ticket subject."""
         active_session = room.get_active_session() if hasattr(room, 'get_active_session') else False
         assigned_name = ''
         assigned_id = None
@@ -45,9 +52,14 @@ class TicketingController(http.Controller):
             preview = (last_msg.content_text or '')[:80]
             preview_sender = last_msg.sender_type or ''
 
+        # Primary ticket (1-to-1 link)
+        ticket = room.ticket_ids[:1] if room.ticket_ids else False
+
         return {
             'id': room.id,
-            'name': room.name,
+            # Display name = ticket subject (chat bubble title)
+            'name': ticket.subject if ticket else room.name,
+            'room_name': room.name,
             'customer_name': room.customer_name or '',
             'customer_phone': room.customer_phone or room.external_conversation_id or '',
             'customer_initial': room.customer_initial or '--',
@@ -62,6 +74,13 @@ class TicketingController(http.Controller):
             'customer_rating': active_session.customer_rating if active_session else None,
             'last_message_preview': preview,
             'last_message_sender_type': preview_sender,
+            # Ticket link
+            'ticket_id': ticket.id if ticket else None,
+            'ticket_subject': ticket.subject if ticket else '',
+            'ticket_priority': ticket.priority if ticket else '',
+            'ticket_state': ticket.state if ticket else '',
+            'ticket_required_specialization': ticket.required_specialization if ticket else '',
+            'ticket_topic': ticket.topic if ticket else '',
         }
 
     @staticmethod
@@ -90,18 +109,31 @@ class TicketingController(http.Controller):
 
     @staticmethod
     def _ticket_to_dict(ticket):
+        expert = ticket.assigned_expert_id
+        last_msg = ticket.ticket_message_ids[-1:] if ticket.ticket_message_ids else False
         return {
             'id': ticket.id,
             'name': ticket.name,
+            # subject is the chat bubble title
             'subject': ticket.subject or '',
             'description': ticket.description or '',
+            'topic': ticket.topic or '',
+            'required_specialization': ticket.required_specialization or '',
+            'category': ticket.category or '',
             'customer_name': ticket.customer_id.name if ticket.customer_id else '',
+            # chat_room_id links to the associated chat bubble
+            'chat_room_id': ticket.room_id.id if ticket.room_id else None,
+            'chat_room_name': ticket.room_id.name if ticket.room_id else '',
+            # keep room_id for backward compat
             'room_id': ticket.room_id.id if ticket.room_id else None,
-            'room_name': ticket.room_id.customer_name if ticket.room_id else '',
             'created_by': ticket.created_by_id.name if ticket.created_by_id else '',
             'created_by_id': ticket.created_by_id.id if ticket.created_by_id else None,
-            'assigned_expert': ticket.assigned_expert_id.name if ticket.assigned_expert_id else '',
-            'assigned_expert_id': ticket.assigned_expert_id.id if ticket.assigned_expert_id else None,
+            'assigned_expert': expert.name if expert else '',
+            'assigned_expert_id': expert.id if expert else None,
+            'assigned_expert_specialization': expert.dke_specialization or '' if expert else '',
+            'assigned_expert_specialization_label': TicketingController.SPECIALIZATION_LABELS.get(
+                expert.dke_specialization or '', '') if expert else '',
+            'assigned_expert_avg_resolution': expert.avg_resolution_time or 0.0 if expert else 0.0,
             'priority': ticket.priority,
             'state': ticket.state,
             'sla_deadline': TicketingController._fmt_dt(ticket.sla_deadline),
@@ -109,8 +141,11 @@ class TicketingController(http.Controller):
             'first_response_at': TicketingController._fmt_dt(ticket.first_response_at),
             'resolved_at': TicketingController._fmt_dt(ticket.resolved_at),
             'created_at': TicketingController._fmt_dt(ticket.create_date),
-            'last_reply_at': None,
-            'message_count': len(ticket.ticket_message_ids) if ticket.ticket_message_ids else 0,
+            'last_reply_at': TicketingController._fmt_dt(last_msg.created_at) if last_msg else None,
+            # resolution metrics
+            'resolution_time_hours': ticket.resolution_time_hours or 0.0,
+            'message_count': ticket.message_count or 0,
+            'internal_message_count': len(ticket.ticket_message_ids),
         }
 
     # ──────────────────────────────────────────────────────────────
@@ -380,15 +415,36 @@ class TicketingController(http.Controller):
 
     @http.route('/api/ticketing/rooms/create', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
     def create_ticketing_room(self, **kwargs):
-        """POST /api/chat/rooms/create — Create a new Ticketing Room."""
+        """POST /api/ticketing/rooms/create — Create a new Ticketing Room + auto-create linked Support Ticket.
+
+        Body:
+          title             (required) — Chat bubble title / ticket subject
+          customer_name     (required) — Customer display name
+          customer_phone    optional
+          source            whatsapp|shopee|platform  (default: whatsapp)
+          priority          low|medium|high|urgent    (default: medium)
+          topic             product_inquiry|order_complaint|… (default: other)
+          required_specialization  face_wash|serum|lotion|toner  (optional)
+          description       optional ticket description
+          message           optional first chat message to send
+        """
         try:
             raw = request.httprequest.data
             body = json.loads(raw) if raw else {}
+            title = (body.get('title') or '').strip()
             customer_name = (body.get('customer_name') or '').strip()
             customer_phone = (body.get('customer_phone') or '').strip()
             source = body.get('source', 'whatsapp')
+            priority = body.get('priority', 'medium')
+            topic = body.get('topic', 'other')
+            required_specialization = body.get('required_specialization') or False
+            description = (body.get('description') or '').strip()
             message = (body.get('message') or '').strip()
 
+            if not title:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'title (judul tiket/chat) wajib diisi.'}, status=400
+                )
             if not customer_name:
                 return request.make_json_response(
                     {'status': 'error', 'message': 'customer_name wajib diisi.'}, status=400
@@ -396,12 +452,21 @@ class TicketingController(http.Controller):
 
             if source not in ('whatsapp', 'shopee', 'platform'):
                 source = 'whatsapp'
+            if priority not in ('low', 'medium', 'high', 'urgent'):
+                priority = 'medium'
+            valid_topics = ('product_inquiry', 'order_complaint', 'return_refund', 'shipment', 'payment', 'other')
+            if topic not in valid_topics:
+                topic = 'other'
+            valid_specs = ('face_wash', 'serum', 'lotion', 'toner')
+            if required_specialization not in valid_specs:
+                required_specialization = False
 
             now = fields.Datetime.now()
             user = request.env.user
 
+            # Room name = title (the chat bubble display name)
             room = request.env['dke.ticketing.room'].sudo().create({
-                'name': customer_name,
+                'name': title,
                 'customer_name': customer_name,
                 'customer_phone': customer_phone,
                 'source': source,
@@ -411,6 +476,22 @@ class TicketingController(http.Controller):
                 'assigned_at': now,
                 'last_message_time': now,
             })
+
+            # Auto-create support ticket linked to this room
+            ticket_ref = request.env['ir.sequence'].sudo().next_by_code('dke.support.ticket') or 'TKT/NEW'
+            ticket_vals = {
+                'name': ticket_ref,
+                'subject': title,
+                'description': description,
+                'room_id': room.id,
+                'created_by_id': user.id,
+                'priority': priority,
+                'topic': topic,
+                'state': 'open',
+            }
+            if required_specialization:
+                ticket_vals['required_specialization'] = required_specialization
+            request.env['dke.support.ticket'].sudo().create(ticket_vals)
 
             # Create session
             request.env['dke.ticketing.session'].sudo().create({
@@ -431,9 +512,7 @@ class TicketingController(http.Controller):
                     'send_status': 'sent',
                     'created_at': now,
                 })
-                # Increment total_messages_sent for the user
                 user.sudo().write({'total_messages_sent': (user.total_messages_sent or 0) + 1})
-
 
             return request.make_json_response({
                 'status': 'success',
@@ -448,10 +527,11 @@ class TicketingController(http.Controller):
     # ─── Direct Chat (find-or-create between two users) ──────────
     @http.route('/api/ticketing/direct', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
     def direct_chat(self, **kwargs):
-        """POST /api/chat/direct — Find or create a direct Ticketing Room between current user and a partner.
+        """POST /api/chat/direct — Create a new direct Ticketing Room between current user and a partner.
 
-        Body: { "partner_id": <int> }
-        Returns: the room dict (existing or newly created).
+        Each call always creates a NEW room (keyed by ticket subject, not by contact pair).
+        Body: { "partner_id": <int>, "subject": <str>, "category": <str> }
+        Returns: the newly created room dict.
         """
         try:
             raw = request.httprequest.data
@@ -472,30 +552,23 @@ class TicketingController(http.Controller):
             user = request.env.user
             Room = request.env['dke.ticketing.room'].sudo()
 
-            # Look for existing direct room between these two users
-            # external_conversation_id stores partner user ID as string
-            existing = Room.search([
-                ('source', '=', 'platform'),
-                '|',
-                '&', ('assigned_to', '=', user.id), ('external_conversation_id', '=', str(partner_id)),
-                '&', ('assigned_to', '=', partner_id), ('external_conversation_id', '=', str(user.id)),
-            ], limit=1)
+            subject = (body.get('subject') or '').strip()
+            category = (body.get('category') or partner.dke_specialization or 'face_wash')
 
-            if existing:
-                return request.make_json_response({
-                    'status': 'success',
-                    'data': self._room_to_dict(existing),
-                })
+            if not subject:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Judul tiket (subject) wajib diisi.'}, status=400
+                )
 
-            # Create new direct room
+            # Always create a new room — primary key is ticket subject, not contact pair
             now = fields.Datetime.now()
-            room_name = 'Direct: %s ↔ %s' % (user.name, partner.name)
+            room_name = subject  # room name = ticket title
 
             room = Room.create({
                 'name': room_name,
                 'customer_name': partner.name,
                 'customer_phone': partner.dke_phone or partner.email or '',
-                'external_conversation_id': str(partner_id),   # partner user ID for lookup
+                'external_conversation_id': str(partner_id),
                 'source': 'platform',
                 'state': 'active',
                 'assigned_to': user.id,
@@ -521,22 +594,23 @@ class TicketingController(http.Controller):
                 'created_at': now,
             })
 
-            # ── Auto-create support ticket if CS is talking to Expert ──
-            if user.dke_role == 'customer_care' and partner.dke_role == 'expert_staff':
-                body = json.loads(request.httprequest.data or b'{}') if request.httprequest.data else {}
-                subject = (body.get('subject') or room_name).strip()
-                category = (body.get('category') or partner.dke_specialization or 'face_wash')
-                request.env['dke.support.ticket'].sudo().create({
-                    'name': request.env['ir.sequence'].sudo().next_by_code('dke.support.ticket') or 'TIK/NEW',
-                    'subject': subject,
-                    'description': 'Tiket otomatis dari percakapan: %s' % room_name,
-                    'room_id': room.id,
-                    'created_by_id': user.id,
-                    'assigned_expert_id': partner_id,
-                    'priority': body.get('priority', 'medium'),
-                    'state': 'open',
-                    'category': category,
-                })
+            # Auto-create support ticket
+            Sequence = request.env['ir.sequence'].sudo()
+            ticket_ref = Sequence.next_by_code('dke.support.ticket') or 'TKT/NEW'
+            ticket = request.env['dke.support.ticket'].sudo().create({
+                'name': ticket_ref,
+                'subject': subject,
+                'description': 'Tiket otomatis dari percakapan: %s' % room_name,
+                'room_id': room.id,
+                'created_by_id': user.id,
+                'assigned_expert_id': partner_id if partner.dke_role == 'expert_staff' else False,
+                'priority': body.get('priority', 'medium'),
+                'state': 'open',
+                'category': category,
+                'topic': body.get('topic', 'other'),
+                'required_specialization': category,
+            })
+            _logger.info("Auto-created ticket %s for room %s", ticket.name, room.id)
 
             return request.make_json_response({
                 'status': 'success',
@@ -607,15 +681,24 @@ class TicketingController(http.Controller):
 
     @http.route('/api/tickets', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
     def get_tickets(self, **kwargs):
-        """GET /api/tickets — List tickets with role-based filtering.
-        
-        For expert_staff: shows tickets assigned to them.
-        For customer_care: shows tickets they created.
+        """GET /api/tickets — List tickets with role-based + multi-field filtering.
+
+        Query params:
+          state, priority, topic, specialization (required_specialization),
+          search (searches subject), page, limit
+
+        For expert_staff: scoped to their own tickets.
+        For customer_care: scoped to tickets they created.
+        For sales_manager/admin: all tickets.
         """
         try:
             user = request.env.user
             role = user.dke_role or ''
             state = kwargs.get('state')
+            priority = kwargs.get('priority')
+            topic = kwargs.get('topic')
+            specialization = kwargs.get('specialization')
+            search = (kwargs.get('search') or '').strip()
             page = max(int(kwargs.get('page', 1)), 1)
             limit = min(int(kwargs.get('limit', 20)), 100)
 
@@ -624,27 +707,27 @@ class TicketingController(http.Controller):
                 domain.append(('assigned_expert_id', '=', user.id))
             elif role == 'customer_care':
                 domain.append(('created_by_id', '=', user.id))
-            # else: show all (for admins/managers)
+            # sales_manager / admin → no restriction
 
             if state:
                 domain.append(('state', '=', state))
+            if priority:
+                domain.append(('priority', '=', priority))
+            if topic:
+                domain.append(('topic', '=', topic))
+            if specialization:
+                domain.append(('required_specialization', '=', specialization))
+            if search:
+                domain += ['|', ('subject', 'ilike', search), ('name', 'ilike', search)]
 
             Ticket = request.env['dke.support.ticket'].sudo()
             total = Ticket.search_count(domain)
             tickets = Ticket.search(domain, limit=limit, offset=(page - 1) * limit)
 
-            # Enrich with last reply time
-            result = []
-            for t in tickets:
-                td = self._ticket_to_dict(t)
-                last_msg = t.ticket_message_ids[-1:] if t.ticket_message_ids else False
-                td['last_reply_at'] = self._fmt_dt(last_msg.created_at) if last_msg else None
-                result.append(td)
-
             return request.make_json_response({
                 'status': 'success',
                 'meta': {'total': total, 'page': page, 'limit': limit, 'pages': -(-total // limit)},
-                'data': result,
+                'data': [self._ticket_to_dict(t) for t in tickets],
             })
         except Exception as e:
             _logger.error("get_tickets error: %s", e, exc_info=True)
@@ -817,9 +900,35 @@ class TicketingController(http.Controller):
                 {'status': 'error', 'message': str(e)}, status=500
             )
 
+    @http.route('/api/tickets/<int:ticket_id>/goto-chat', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def goto_chat(self, ticket_id, **kwargs):
+        """GET /api/tickets/{ticket_id}/goto-chat — Get the linked chat room for a ticket.
+
+        Returns the room dict so the frontend can navigate directly to the chat bubble.
+        """
+        try:
+            ticket = request.env['dke.support.ticket'].sudo().browse(ticket_id)
+            if not ticket.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Ticket tidak ditemukan.'}, status=404
+                )
+            if not ticket.room_id:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Ticket ini belum memiliki chat room.'}, status=404
+                )
+            return request.make_json_response({
+                'status': 'success',
+                'data': self._room_to_dict(ticket.room_id),
+            })
+        except Exception as e:
+            _logger.error("goto_chat error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
     @http.route('/api/tickets/<int:ticket_id>/resolve', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
     def resolve_ticket(self, ticket_id, **kwargs):
-        """POST /api/tickets/{ticket_id}/resolve — Mark ticket as resolved."""
+        """POST /api/tickets/{ticket_id}/resolve — Mark ticket as resolved and update expert stats."""
         try:
             ticket = request.env['dke.support.ticket'].sudo().browse(ticket_id)
             if not ticket.exists():
@@ -827,24 +936,8 @@ class TicketingController(http.Controller):
                     {'status': 'error', 'message': 'Ticket tidak ditemukan.'}, status=404
                 )
 
-            ticket.write({
-                'state': 'resolved',
-                'resolved_at': fields.Datetime.now(),
-            })
-
-            # --- Calculate Resolution Velocity ---
-            expert = ticket.assigned_expert_id
-            if expert:
-                diff = fields.Datetime.now() - ticket.create_date
-                hours_taken = diff.total_seconds() / 3600.0
-                current_total = expert.total_tickets_resolved or 0
-                current_avg = expert.avg_resolution_time or 0.0
-                new_total = current_total + 1
-                new_avg = ((current_avg * current_total) + hours_taken) / new_total
-                expert.sudo().write({
-                    'total_tickets_resolved': new_total,
-                    'avg_resolution_time': new_avg,
-                })
+            # action_resolve sets resolved_at, updates expert stats
+            ticket.action_resolve()
 
             return request.make_json_response({
                 'status': 'success',
@@ -987,21 +1080,22 @@ class TicketingController(http.Controller):
     # Expert staff list (for CS to select when creating tickets)
     # ──────────────────────────────────────────────────────────────
 
-    SPECIALIZATION_LABELS = {
-        'face_wash': 'Face Wash',
-        'serum': 'Serum',
-        'lotion': 'Lotion',
-        'toner': 'Toner',
-    }
-
     @http.route('/api/users/experts', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
     def get_expert_staff(self, **kwargs):
-        """GET /api/users/experts — List available expert staff with expertise labels."""
+        """GET /api/users/experts — List available expert staff.
+
+        Optional filter: ?specialization=face_wash
+        """
         try:
-            experts = request.env['res.users'].sudo().search([
+            specialization = kwargs.get('specialization')
+            domain = [
                 ('dke_role', '=', 'expert_staff'),
                 ('dke_status', '=', 'active'),
-            ])
+            ]
+            if specialization:
+                domain.append(('dke_specialization', '=', specialization))
+
+            experts = request.env['res.users'].sudo().search(domain)
 
             return request.make_json_response({
                 'status': 'success',
@@ -1013,12 +1107,167 @@ class TicketingController(http.Controller):
                     'specialization_label': self.SPECIALIZATION_LABELS.get(e.dke_specialization or '', ''),
                     'avg_rating': e.avg_rating or 0,
                     'avg_resolution_time': e.avg_resolution_time or 0.0,
+                    'avg_resolution_message_count': e.avg_resolution_message_count or 0.0,
                     'total_tickets_resolved': e.total_tickets_resolved or 0,
                     'total_messages_sent': e.total_messages_sent or 0,
+                    'avatar_url': '/web/image/res.users/%d/avatar_128' % e.id,
                 } for e in experts],
             })
         except Exception as e:
             _logger.error("get_expert_staff error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # Expert Performance Dashboard (admin)
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/performance/experts', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def get_expert_performance(self, **kwargs):
+        """GET /api/performance/experts \u2014 Expert staff performance dashboard.
+
+        Available to: sales_manager, admin.
+        Expert staff can access /api/performance/me instead (own stats only).
+
+        Query params:
+          specialization \u2014 filter by specialization
+          sort_by        \u2014 total_tickets_resolved | avg_resolution_time | avg_rating (default: total_tickets_resolved)
+        """
+        try:
+            user = request.env.user
+            role = user.dke_role or ''
+
+            specialization = kwargs.get('specialization')
+            sort_by = kwargs.get('sort_by', 'total_tickets_resolved')
+
+            # Only managers/admin can see all; experts see only themselves
+            if role == 'expert_staff':
+                domain = [('id', '=', user.id)]
+            elif role in ('sales_manager', 'admin') or user._is_admin():
+                domain = [('dke_role', '=', 'expert_staff')]
+                if specialization:
+                    domain.append(('dke_specialization', '=', specialization))
+            else:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Akses ditolak.'}, status=403
+                )
+
+            experts = request.env['res.users'].sudo().search(domain)
+
+            Ticket = request.env['dke.support.ticket'].sudo()
+
+            def _expert_perf(e):
+                # Current period: all-time stats
+                resolved = Ticket.search([
+                    ('assigned_expert_id', '=', e.id),
+                    ('state', 'in', ('resolved', 'closed')),
+                ])
+                in_progress = Ticket.search_count([
+                    ('assigned_expert_id', '=', e.id),
+                    ('state', '=', 'in_progress'),
+                ])
+                open_count = Ticket.search_count([
+                    ('assigned_expert_id', '=', e.id),
+                    ('state', '=', 'open'),
+                ])
+                # Top topics
+                topic_counts = {}
+                for t in resolved:
+                    topic_counts[t.topic or 'other'] = topic_counts.get(t.topic or 'other', 0) + 1
+                top_topics = sorted(topic_counts.items(), key=lambda x: -x[1])[:3]
+
+                return {
+                    'id': e.id,
+                    'name': e.name,
+                    'email': e.email or e.login,
+                    'avatar_url': '/web/image/res.users/%d/avatar_128' % e.id,
+                    'specialization': e.dke_specialization or '',
+                    'specialization_label': self.SPECIALIZATION_LABELS.get(e.dke_specialization or '', ''),
+                    'total_tickets_resolved': e.total_tickets_resolved or len(resolved),
+                    'tickets_in_progress': in_progress,
+                    'tickets_open': open_count,
+                    'avg_resolution_time_hours': e.avg_resolution_time or 0.0,
+                    'avg_resolution_message_count': e.avg_resolution_message_count or 0.0,
+                    'avg_rating': e.avg_rating or 0.0,
+                    'total_messages_sent': e.total_messages_sent or 0,
+                    'top_topics': [{'topic': k, 'count': v} for k, v in top_topics],
+                }
+
+            result = [_expert_perf(e) for e in experts]
+
+            # Sort
+            valid_sorts = ('total_tickets_resolved', 'avg_resolution_time', 'avg_rating')
+            if sort_by not in valid_sorts:
+                sort_by = 'total_tickets_resolved'
+            sort_key = {
+                'total_tickets_resolved': lambda x: -x['total_tickets_resolved'],
+                'avg_resolution_time': lambda x: x['avg_resolution_time_hours'],
+                'avg_rating': lambda x: -x['avg_rating'],
+            }[sort_by]
+            result.sort(key=sort_key)
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': result,
+            })
+        except Exception as e:
+            _logger.error("get_expert_performance error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    @http.route('/api/performance/me', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def get_my_performance(self, **kwargs):
+        """GET /api/performance/me — Expert staff views their own performance metrics."""
+        try:
+            user = request.env.user
+            if user.dke_role not in ('expert_staff', 'sales_manager') and not user._is_admin():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Akses ditolak.'}, status=403
+                )
+
+            # Refresh stats from DB
+            user.sudo()._recompute_expert_stats()
+
+            Ticket = request.env['dke.support.ticket'].sudo()
+            resolved = Ticket.search([
+                ('assigned_expert_id', '=', user.id),
+                ('state', 'in', ('resolved', 'closed')),
+            ])
+            in_progress = Ticket.search_count([
+                ('assigned_expert_id', '=', user.id),
+                ('state', '=', 'in_progress'),
+            ])
+
+            # Resolution time distribution: last 10 resolved
+            recent = resolved[:10]
+            recent_list = [{
+                'ticket_id': t.id,
+                'subject': t.subject,
+                'resolved_at': self._fmt_dt(t.resolved_at),
+                'resolution_time_hours': t.resolution_time_hours,
+                'message_count': t.message_count,
+            } for t in recent]
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': {
+                    'id': user.id,
+                    'name': user.name,
+                    'specialization': user.dke_specialization or '',
+                    'specialization_label': self.SPECIALIZATION_LABELS.get(user.dke_specialization or '', ''),
+                    'total_tickets_resolved': user.total_tickets_resolved or 0,
+                    'tickets_in_progress': in_progress,
+                    'avg_resolution_time_hours': user.avg_resolution_time or 0.0,
+                    'avg_resolution_message_count': user.avg_resolution_message_count or 0.0,
+                    'avg_rating': user.avg_rating or 0.0,
+                    'total_messages_sent': user.total_messages_sent or 0,
+                    'recent_resolved': recent_list,
+                },
+            })
+        except Exception as e:
+            _logger.error("get_my_performance error: %s", e, exc_info=True)
             return request.make_json_response(
                 {'status': 'error', 'message': str(e)}, status=500
             )

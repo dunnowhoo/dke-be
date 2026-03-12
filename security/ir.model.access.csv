@@ -51,3 +51,6 @@ access_faq_article_version_manager,dke.faq.article.version.manager,model_dke_faq
 access_notification_care,dke.notification.care,model_dke_notification,group_customer_care,1,1,1,0
 access_notification_expert,dke.notification.expert,model_dke_notification,group_expert_staff,1,1,1,0
 access_notification_manager,dke.notification.manager,model_dke_notification,group_sales_manager,1,1,1,1
+access_support_ticket_care_write,dke.support.ticket.care.write,model_dke_support_ticket,group_customer_care,1,1,1,0
+access_ticketing_room_expert,dke.ticketing.room.expert,model_dke_ticketing_room,group_expert_staff,1,1,0,0
+access_ticketing_message_expert,dke.ticketing.message.expert,model_dke_ticketing_message,group_expert_staff,1,1,1,0

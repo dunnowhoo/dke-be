@@ -107,6 +107,12 @@
               action="action_dke_ticket_monitoring"
               sequence="20"/>
 
+    <menuitem id="menu_dke_expert_performance"
+              name="Expert Staff Performance"
+              parent="menu_dke_monitoring"
+              action="action_dke_expert_performance"
+              sequence="30"/>
+
     <!-- ============================================================ -->
     <!-- Configuration Menu                                            -->
     <!-- ============================================================ -->

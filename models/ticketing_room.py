@@ -66,6 +66,39 @@ class TicketingRoom(models.Model):
         'dke.scheduled.message', 'room_id', string='Scheduled Messages'
     )
 
+    # 1-to-1: the primary ticket linked to this chat bubble
+    ticket_id = fields.Many2one(
+        'dke.support.ticket',
+        string='Linked Ticket',
+        compute='_compute_ticket_id',
+        store=False,
+    )
+    ticket_subject = fields.Char(
+        string='Ticket Subject',
+        compute='_compute_ticket_id',
+        store=False,
+        help='Subject of the primary linked ticket (= chat bubble title).',
+    )
+    ticket_priority = fields.Char(
+        string='Ticket Priority',
+        compute='_compute_ticket_id',
+        store=False,
+    )
+    ticket_state = fields.Char(
+        string='Ticket Status',
+        compute='_compute_ticket_id',
+        store=False,
+    )
+
+    @api.depends('ticket_ids', 'ticket_ids.subject', 'ticket_ids.priority', 'ticket_ids.state')
+    def _compute_ticket_id(self):
+        for rec in self:
+            ticket = rec.ticket_ids[:1]
+            rec.ticket_id = ticket
+            rec.ticket_subject = ticket.subject if ticket else ''
+            rec.ticket_priority = ticket.priority if ticket else ''
+            rec.ticket_state = ticket.state if ticket else ''
+
     @api.depends('customer_name')
     def _compute_initial(self):
         for rec in self:
@@ -88,9 +121,13 @@ class TicketingRoom(models.Model):
         if self.assigned_to:
             assigned_name = self.assigned_to.name or ''
 
+        ticket = self.ticket_ids[:1]
+
         return {
             'id': self.id,
-            'name': self.name,
+            # Display name = ticket subject (chat bubble title), fallback to room name
+            'name': ticket.subject if ticket else self.name,
+            'room_name': self.name,
             'customer_name': self.customer_name or '',
             'customer_phone': self.customer_phone or '',
             'customer_initial': self.customer_initial or '--',
@@ -103,4 +140,11 @@ class TicketingRoom(models.Model):
             'session_id': active_session.id if active_session else None,
             'session_code': active_session.session_code if active_session else None,
             'customer_rating': active_session.customer_rating if active_session else None,
+            # Ticket info
+            'ticket_id': ticket.id if ticket else None,
+            'ticket_subject': ticket.subject if ticket else '',
+            'ticket_priority': ticket.priority if ticket else '',
+            'ticket_state': ticket.state if ticket else '',
+            'ticket_required_specialization': ticket.required_specialization if ticket else '',
+            'ticket_topic': ticket.topic if ticket else '',
         }
