@@ -34,7 +34,7 @@ class ShopeeConfig(models.Model):
     _rec_name = "shop_name"
 
     shop_name = fields.Char(string="Shop Name", required=True)
-    shop_id = fields.Integer(string="Shop ID")
+    shop_id = fields.Char(string="Shop ID")
 
     # ── Credentials (diisi saat akun Shopee sudah aktif) ──────────────────────
     partner_id = fields.Char(
@@ -298,7 +298,7 @@ class ShopeeOrder(models.Model):
 
     # ── Buyer ─────────────────────────────────────────────────────────────────
     buyer_username = fields.Char(string="Buyer Username")
-    buyer_user_id = fields.Integer(string="Buyer User ID")
+    buyer_user_id = fields.Char(string="Buyer User ID")
 
     # ── Nilai Transaksi ───────────────────────────────────────────────────────
     total_amount = fields.Float(string="Total Amount")
@@ -363,11 +363,11 @@ class ShopeeOrderItem(models.Model):
 
     order_id = fields.Many2one("shopee.order", string="Order", ondelete="cascade", required=True)
 
-    item_id = fields.Integer(string="Item ID")
+    item_id = fields.Char(string="Item ID")
     item_name = fields.Char(string="Item Name")
     item_sku = fields.Char(string="Item SKU")
 
-    model_id = fields.Integer(string="Model ID")
+    model_id = fields.Char(string="Model ID")
     model_name = fields.Char(string="Model / Variant")
     model_sku = fields.Char(string="Model SKU")
 

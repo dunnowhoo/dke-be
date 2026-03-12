@@ -454,6 +454,7 @@ class ShopeeDataService:
                 and config.shop_id and config.access_token:
 
             # ── Auto-refresh token jika hampir expired (< 10 menit) ──
+            # error di-log di dalam method; lanjut dengan token lama jika gagal
             config.refresh_token_if_needed()
 
             self._client = ShopeeClient(
@@ -705,7 +706,7 @@ class ShopeeDataService:
                 if st not in NON_REVENUE_STATUSES:
                     total_revenue += o.total_amount or 0.0
                 if st == "COMPLETED":
-                    for esc in o.order_escrow_ids:
+                    for esc in o.escrow_id:
                         total_escrow += esc.final_escrow_amount or 0.0
             return {
                 "total_orders": len(orders),
@@ -836,21 +837,6 @@ class ShopeeDataService:
         Order = env["shopee.order"].sudo()
         Item = env["shopee.order.item"].sudo()
         Escrow = env["shopee.order.escrow"].sudo()
-        int32_min = -2147483648
-        int32_max = 2147483647
-
-        def _safe_int32(value, field_name: str) -> int:
-            try:
-                v = int(value or 0)
-            except (TypeError, ValueError):
-                return 0
-            if v < int32_min or v > int32_max:
-                _logger.warning(
-                    "[ShopeeDataService] %s out of int32 range (%s), fallback to 0",
-                    field_name, v,
-                )
-                return 0
-            return v
 
         order_sn = order_data.get("order_sn", "")
         if not order_sn:
@@ -861,7 +847,7 @@ class ShopeeDataService:
             "order_sn":               order_sn,
             "order_status":           order_data.get("order_status", ""),
             "buyer_username":          order_data.get("buyer_username", ""),
-            "buyer_user_id":           order_data.get("buyer_user_id", 0),
+            "buyer_user_id":           str(order_data.get("buyer_user_id") or ""),
             "total_amount":            order_data.get("total_amount", 0.0),
             "currency":                order_data.get("currency", "IDR"),
             "estimated_shipping_fee":  order_data.get("estimated_shipping_fee", 0.0),
@@ -897,10 +883,10 @@ class ShopeeDataService:
             img = (item.get("image_info") or {}).get("image_url", "")
             Item.create({
                 "order_id":           order_rec.id,
-                "item_id":            _safe_int32(item.get("item_id", 0), "item_id"),
+                "item_id":            str(item.get("item_id") or ""),
                 "item_name":          item.get("item_name", ""),
                 "item_sku":           item.get("item_sku", ""),
-                "model_id":           _safe_int32(item.get("model_id", 0), "model_id"),
+                "model_id":           str(item.get("model_id") or ""),
                 "model_name":         item.get("model_name", ""),
                 "model_sku":          item.get("model_sku", ""),
                 "quantity_purchased": item.get("quantity_purchased", 1),

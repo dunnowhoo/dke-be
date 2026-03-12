@@ -6,6 +6,7 @@ import json
 import datetime
 import logging
 import time
+import html
 
 import requests
 import werkzeug.exceptions
@@ -265,7 +266,7 @@ class IntegrationController(http.Controller):
             "refresh_token":   data.get("refresh_token") or False,
             "token_expire_in": expire_in,
             "token_expire_at": ts_now + expire_in,
-            "shop_id":         shop_id,
+            "shop_id":         str(shop_id),
             "shop_name":       shop_name,
         })
 
@@ -341,7 +342,7 @@ class IntegrationController(http.Controller):
         except Exception as exc:
             _logger.exception("[Shopee OAuth] Error saat tukar code: %s", exc)
             return request.make_response(
-                f"<h2>OAuth Error</h2><p>Gagal menghubungi Shopee: {exc}</p>",
+                f"<h2>OAuth Error</h2><p>Gagal menghubungi Shopee: {html.escape(str(exc))}</p>",
                 headers=[("Content-Type", "text/html")],
                 status=500,
             )
@@ -351,7 +352,7 @@ class IntegrationController(http.Controller):
             error_msg = data.get("message", "Unknown error")
             _logger.error("[Shopee OAuth] Token exchange gagal: %s", data)
             return request.make_response(
-                f"<h2>OAuth Error</h2><p>Shopee mengembalikan error: {error_msg}</p>",
+                f"<h2>OAuth Error</h2><p>Shopee mengembalikan error: {html.escape(str(error_msg))}</p>",
                 headers=[("Content-Type", "text/html")],
                 status=400,
             )
@@ -362,7 +363,7 @@ class IntegrationController(http.Controller):
             "refresh_token": data.get("refresh_token") or False,
             "token_expire_in": expire_in,
             "token_expire_at": ts + expire_in,
-            "shop_id": int(shop_id),
+            "shop_id": str(shop_id),
             "shop_name": data.get("shop_name") or f"Shop {shop_id}",
         })
 
