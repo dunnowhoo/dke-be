@@ -40,6 +40,7 @@ class ChatController(http.Controller):
 
     @staticmethod
     def _room_to_dict(room, include_preview=False):
+        active_session = room.get_active_session() if hasattr(room, 'get_active_session') else False
         data = {
             'id': room.id,
             'name': room.name,
@@ -56,6 +57,8 @@ class ChatController(http.Controller):
             'unread_count': room.unread_count,
             'last_message_time': ChatController._fmt_dt(room.last_message_time),
             'has_discuss_channel': bool(room.discuss_channel_id),
+            'session_id': active_session.id if active_session else None,
+            'session_code': active_session.session_code if active_session else None,
         }
         if include_preview:
             messages = room.message_ids
@@ -77,7 +80,7 @@ class ChatController(http.Controller):
         if sender_type == 'admin':
             sender_type = 'cs'
 
-        # Resolve original filename from ir.attachment when available
+        # Resolve original filename and ensure access_token on URL
         att_filename = ''
         att_url = msg.attachment_url or ''
         if att_url and '/web/content/' in att_url:
@@ -86,6 +89,8 @@ class ChatController(http.Controller):
                 att_rec = msg.env['ir.attachment'].sudo().browse(int(att_id_str))
                 if att_rec.exists():
                     att_filename = att_rec.name or ''
+                    # Re-generate URL with access_token for browser access
+                    att_url = ChatController._att_url_with_token(att_rec)
             except Exception:
                 pass
         if not att_filename and msg.message_type in ('image', 'file'):
@@ -94,6 +99,7 @@ class ChatController(http.Controller):
         return {
             'id': msg.id,
             'room_id': msg.room_id.id if msg.room_id else None,
+            'session_id': msg.session_id.id if msg.session_id else None,
             'external_message_id': msg.external_message_id or '',
             'sender_type': sender_type,
             'sender_id': msg.sender_id.id if msg.sender_id else None,
@@ -107,6 +113,17 @@ class ChatController(http.Controller):
             'send_status': msg.send_status,
             'created_at': ChatController._fmt_dt(msg.created_at),
         }
+
+    @staticmethod
+    def _att_url_with_token(att):
+        """Build /web/content URL with access_token for browser access."""
+        if not att.access_token:
+            att.sudo().generate_access_token()
+        token = att.access_token or ''
+        url = '/web/content/%d?download=true' % att.id
+        if token:
+            url += '&access_token=%s' % token
+        return url
 
     @staticmethod
     def _discuss_msg_to_dict(mail_msg, channel):
@@ -129,14 +146,39 @@ class ChatController(http.Controller):
         att_filename = ''
         msg_type = 'text'
         if att:
-            att_url = '/web/content/%d?download=true' % att.id
+            att_url = ChatController._att_url_with_token(att)
             att_filename = att.name or ''
             mimetype = att.mimetype or ''
             msg_type = 'image' if mimetype.startswith('image/') else 'file'
 
+        # Fallback: check for ir.attachment linked to this message
+        if not att_url:
+            linked_att = mail_msg.env['ir.attachment'].sudo().search([
+                ('res_model', '=', 'mail.message'),
+                ('res_id', '=', mail_msg.id),
+            ], limit=1)
+            if linked_att:
+                att_url = ChatController._att_url_with_token(linked_att)
+                att_filename = linked_att.name or ''
+                mimetype = linked_att.mimetype or ''
+                msg_type = 'image' if mimetype.startswith('image/') else 'file'
+
+        # Fallback: extract image/file URL from body HTML
+        if not att_url and body:
+            img_match = re.search(r'<img[^>]+src=["\']([^"\']+)["\']', body)
+            if img_match:
+                att_url = img_match.group(1)
+                msg_type = 'image'
+            else:
+                url_match = re.search(r'(/web/(?:content|image)/\d+[^"\'<>\s]*)', body)
+                if url_match:
+                    att_url = url_match.group(1)
+                    msg_type = 'file'
+
         return {
             'id': mail_msg.id,
             'room_id': channel.id if channel else None,
+            'session_id': None,
             'external_message_id': '',
             'sender_type': sender_type,
             'sender_id': mail_msg.author_id.user_ids[:1].id if mail_msg.author_id and mail_msg.author_id.user_ids else None,
@@ -150,6 +192,17 @@ class ChatController(http.Controller):
             'send_status': 'sent',
             'created_at': ChatController._fmt_dt(mail_msg.create_date),
         }
+
+    @staticmethod
+    def _ensure_active_session(room):
+        """Ensure room has exactly one active chat session available."""
+        session = room.get_active_session() if hasattr(room, 'get_active_session') else False
+        if session:
+            return session
+        return request.env['dke.chat.session'].sudo().create({
+            'room_id': room.id,
+            'state': 'active',
+        })
 
     # ──────────────────────────────────────────────────────────────
     # Sync: discuss.channel (WhatsApp) → dke.chat.room
@@ -180,6 +233,9 @@ class ChatController(http.Controller):
         new_ids = set()
         for ch in wa_channels:
             if ch.id in linked_ids:
+                room = existing.filtered(lambda r: r.discuss_channel_id.id == ch.id)[:1]
+                if room:
+                    ChatController._ensure_active_session(room)
                 # Refresh last_message_time from the channel's latest message
                 last_msg = request.env['mail.message'].sudo().search(
                     [('model', '=', 'discuss.channel'),
@@ -188,7 +244,6 @@ class ChatController(http.Controller):
                     order='create_date desc', limit=1,
                 )
                 if last_msg:
-                    room = existing.filtered(lambda r: r.discuss_channel_id.id == ch.id)[:1]
                     if room and (not room.last_message_time or last_msg.create_date > room.last_message_time):
                         updates = {'last_message_time': last_msg.create_date}
                         # Re-open closed room when a new customer message arrives
@@ -205,6 +260,7 @@ class ChatController(http.Controller):
                                     'assigned_at': False,
                                 })
                         room.write(updates)
+                        ChatController._ensure_active_session(room)
 
                         # Notify via bus so the FE picks up new messages
                         # in real-time without polling.
@@ -237,17 +293,39 @@ class ChatController(http.Controller):
                 order='create_date desc', limit=1,
             )
 
-            room = Room.create({
-                'name': ch.name or ('WA: %s' % customer_name),
-                'customer_name': customer_name,
-                'customer_id': partner.id if partner else False,
-                'external_conversation_id': phone,
-                'source': 'whatsapp',
-                'state': 'active',
-                'is_assigned': False,
-                'discuss_channel_id': ch.id,
-                'last_message_time': last_msg.create_date if last_msg else ch.create_date,
-            })
+            # Keep one room per contact (phone/partner). If found, reuse it.
+            same_contact_domain = [('source', '=', 'whatsapp')]
+            if phone:
+                same_contact_domain.append(('external_conversation_id', '=', phone))
+            elif partner:
+                same_contact_domain.append(('customer_id', '=', partner.id))
+            else:
+                same_contact_domain.append(('name', '=', ch.name or ('WA: %s' % customer_name)))
+
+            room = Room.search(same_contact_domain, limit=1)
+            if room:
+                room.write({
+                    'name': room.name or ch.name or ('WA: %s' % customer_name),
+                    'customer_name': customer_name,
+                    'customer_id': partner.id if partner else room.customer_id.id,
+                    'external_conversation_id': phone or room.external_conversation_id,
+                    'discuss_channel_id': ch.id,
+                    'last_message_time': last_msg.create_date if last_msg else (room.last_message_time or ch.create_date),
+                    'state': 'active',
+                })
+            else:
+                room = Room.create({
+                    'name': ch.name or ('WA: %s' % customer_name),
+                    'customer_name': customer_name,
+                    'customer_id': partner.id if partner else False,
+                    'external_conversation_id': phone,
+                    'source': 'whatsapp',
+                    'state': 'active',
+                    'is_assigned': False,
+                    'discuss_channel_id': ch.id,
+                    'last_message_time': last_msg.create_date if last_msg else ch.create_date,
+                })
+            ChatController._ensure_active_session(room)
             new_ids.add(room.id)
 
         return new_ids
@@ -412,10 +490,29 @@ class ChatController(http.Controller):
                     {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
                 )
 
+            if request.env.user.dke_role != 'customer_care':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya customer care yang dapat membalas chat.'},
+                    status=403,
+                )
+
             # Only the assigned CC can reply
             current_uid = request.env.user.id
             assigned_uid = room.assigned_to.id if room.assigned_to else None
-            if room.is_assigned and assigned_uid and assigned_uid != current_uid:
+            active_session = self._ensure_active_session(room)
+
+            # Auto-claim if not yet assigned
+            if not room.is_assigned or not assigned_uid:
+                now = fields.Datetime.now()
+                room.write({
+                    'is_assigned': True,
+                    'assigned_to': current_uid,
+                    'assigned_at': now,
+                })
+                active_session.write({'cs_user_id': current_uid})
+                assigned_uid = current_uid
+
+            if assigned_uid != current_uid:
                 _logger.info(
                     'Reply blocked: room %s assigned to uid=%s (%s), '
                     'but request comes from uid=%s (%s)',
@@ -426,6 +523,12 @@ class ChatController(http.Controller):
                 )
                 return request.make_json_response(
                     {'status': 'error', 'message': 'Chat ini ditangani oleh %s.' % room.assigned_to.name},
+                    status=403,
+                )
+
+            if active_session.cs_user_id and active_session.cs_user_id.id != current_uid:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Session aktif sedang ditangani oleh %s.' % active_session.cs_user_id.name},
                     status=403,
                 )
 
@@ -457,6 +560,7 @@ class ChatController(http.Controller):
                 room.write({'last_message_time': now})
 
                 msg_dict = self._discuss_msg_to_dict(new_mail_msg, channel)
+                msg_dict['session_id'] = active_session.id
                 self._notify_new_message(room_id, msg_dict)
                 return request.make_json_response({
                     'status': 'success',
@@ -466,6 +570,7 @@ class ChatController(http.Controller):
             # ── Fallback: legacy dke.chat.message ───────────────
             msg = request.env['dke.chat.message'].sudo().create({
                 'room_id': room_id,
+                'session_id': active_session.id,
                 'sender_type': 'admin',
                 'sender_id': request.env.user.id,
                 'content_text': message_text,
@@ -517,8 +622,31 @@ class ChatController(http.Controller):
                     {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
                 )
 
+            if request.env.user.dke_role != 'customer_care':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya customer care yang dapat menutup session chat.'},
+                    status=403,
+                )
+
+            current_uid = request.env.user.id
+            assigned_uid = room.assigned_to.id if room.assigned_to else None
+            if assigned_uid and assigned_uid != current_uid:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya customer care yang menangani chat ini yang bisa menutup session.'},
+                    status=403,
+                )
+
+            active_session = self._ensure_active_session(room)
+            active_session.sudo().action_close()
+
+            # Start a fresh active session for the same room/contact.
+            next_session = request.env['dke.chat.session'].sudo().create({
+                'room_id': room.id,
+                'state': 'active',
+            })
+
             room.write({
-                'state': 'done',
+                'state': 'active',
                 'is_assigned': False,
                 'assigned_to': False,
                 'assigned_at': False,
@@ -526,7 +654,11 @@ class ChatController(http.Controller):
 
             return request.make_json_response({
                 'status': 'success',
-                'message': 'Chat berhasil ditutup.',
+                'message': 'Session chat berhasil ditutup. Session baru telah dibuat.',
+                'session': {
+                    'id': next_session.id,
+                    'session_code': next_session.session_code,
+                },
                 'data': self._room_to_dict(room),
             })
         except Exception as e:
@@ -704,6 +836,12 @@ class ChatController(http.Controller):
                     status=404,
                 )
 
+            if request.env.user.dke_role != 'customer_care':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya customer care yang dapat mengambil chat.'},
+                    status=403,
+                )
+
             if room.is_assigned:
                 return request.make_json_response(
                     {
@@ -715,11 +853,22 @@ class ChatController(http.Controller):
                     status=409,
                 )
 
+            active_session = self._ensure_active_session(room)
+            if active_session.cs_user_id and active_session.cs_user_id.id != request.env.user.id:
+                return request.make_json_response(
+                    {
+                        'status': 'error',
+                        'message': 'Session aktif sudah diambil oleh %s.' % active_session.cs_user_id.name,
+                    },
+                    status=409,
+                )
+
             room.write({
                 'is_assigned': True,
                 'assigned_to': request.env.user.id,
                 'assigned_at': fields.Datetime.now(),
             })
+            active_session.sudo().write({'cs_user_id': request.env.user.id})
 
             # If linked to a discuss.channel, add CC as member so they
             # can read/reply inside Odoo Discuss natively.
@@ -767,6 +916,62 @@ class ChatController(http.Controller):
             })
         except Exception as e:
             _logger.error("claim_chat error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    @http.route('/api/chat/rooms/<int:room_id>/assign', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
+    def assign_chat(self, room_id, **kwargs):
+        """POST /api/chat/rooms/{room_id}/assign — Assign current user to active session."""
+        try:
+            room = request.env['dke.chat.room'].sudo().browse(room_id)
+            if not room.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'},
+                    status=404,
+                )
+
+            if request.env.user.dke_role != 'customer_care':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya customer care yang dapat assign chat.'},
+                    status=403,
+                )
+
+            active_session = self._ensure_active_session(room)
+            current_uid = request.env.user.id
+
+            if room.is_assigned and room.assigned_to and room.assigned_to.id != current_uid:
+                return request.make_json_response(
+                    {
+                        'status': 'error',
+                        'message': 'Chat ini ditangani oleh %s.' % room.assigned_to.name,
+                    },
+                    status=409,
+                )
+
+            if active_session.cs_user_id and active_session.cs_user_id.id != current_uid:
+                return request.make_json_response(
+                    {
+                        'status': 'error',
+                        'message': 'Session aktif sudah ditangani oleh %s.' % active_session.cs_user_id.name,
+                    },
+                    status=409,
+                )
+
+            room.sudo().write({
+                'is_assigned': True,
+                'assigned_to': current_uid,
+                'assigned_at': fields.Datetime.now(),
+            })
+            active_session.sudo().write({'cs_user_id': current_uid})
+
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Chat berhasil di-assign.',
+                'data': self._room_to_dict(room),
+            })
+        except Exception as e:
+            _logger.error("assign_chat error: %s", e, exc_info=True)
             return request.make_json_response(
                 {'status': 'error', 'message': str(e)}, status=500
             )
@@ -835,9 +1040,23 @@ class ChatController(http.Controller):
                     {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
                 )
 
+            if request.env.user.dke_role != 'customer_care':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya customer care yang dapat mengirim lampiran.'},
+                    status=403,
+                )
+
             # Only the assigned CC can upload
             current_uid = request.env.user.id
             assigned_uid = room.assigned_to.id if room.assigned_to else None
+            active_session = self._ensure_active_session(room)
+
+            if not room.is_assigned or not assigned_uid:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat belum diambil. Silakan ambil chat terlebih dahulu.'},
+                    status=403,
+                )
+
             if room.is_assigned and assigned_uid and assigned_uid != current_uid:
                 _logger.info(
                     'Upload blocked: room %s assigned to uid=%s, request uid=%s',
@@ -845,6 +1064,12 @@ class ChatController(http.Controller):
                 )
                 return request.make_json_response(
                     {'status': 'error', 'message': 'Chat ini ditangani oleh %s.' % room.assigned_to.name},
+                    status=403,
+                )
+
+            if active_session.cs_user_id and active_session.cs_user_id.id != current_uid:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Session aktif sedang ditangani oleh %s.' % active_session.cs_user_id.name},
                     status=403,
                 )
 
@@ -886,7 +1111,7 @@ class ChatController(http.Controller):
                 'type': 'binary',
                 'mimetype': uploaded.content_type or 'application/octet-stream',
             })
-            attachment_url = '/web/content/%d?download=true' % attachment.id
+            attachment_url = ChatController._att_url_with_token(attachment)
 
             # ── Linked to native WhatsApp discuss.channel ───────
             if room.discuss_channel_id:
@@ -904,6 +1129,7 @@ class ChatController(http.Controller):
                 room.write({'last_message_time': now})
 
                 msg_dict = self._discuss_msg_to_dict(new_mail_msg, channel)
+                msg_dict['session_id'] = active_session.id
                 msg_dict['attachment_url'] = attachment_url
                 msg_dict['attachment_filename'] = filename
                 msg_dict['message_type'] = message_type
@@ -919,6 +1145,7 @@ class ChatController(http.Controller):
             # ── Fallback: legacy dke.chat.message ───────────────
             msg = request.env['dke.chat.message'].sudo().create({
                 'room_id': room_id,
+                'session_id': active_session.id,
                 'sender_type': 'admin',
                 'sender_id': request.env.user.id,
                 'content_text': caption or filename,
