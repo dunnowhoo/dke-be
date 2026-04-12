@@ -55,28 +55,27 @@ class ResUsers(models.Model):
 
     def _recompute_expert_stats(self):
         """Recompute stored performance stats for this expert user."""
-        Ticket = self.env['dke.support.ticket'].sudo()
+        Ticket = self.env['helpdesk.ticket'].sudo()
+        closed_stage_ids = self.env['helpdesk.stage'].sudo().search([('fold', '=', True)]).ids
         for user in self:
             resolved_tickets = Ticket.search([
-                ('assigned_expert_id', '=', user.id),
-                ('state', 'in', ('resolved', 'closed')),
+                ('user_id', '=', user.id),
+                ('stage_id', 'in', closed_stage_ids),
             ])
 
             count = len(resolved_tickets)
             if count:
-                avg_hours = sum(t.resolution_time_hours for t in resolved_tickets) / count
-                avg_msgs = sum(t.message_count for t in resolved_tickets) / count
+                avg_hours = sum(t.close_hours or 0 for t in resolved_tickets) / count
                 # Rating from sessions linked to the rooms of these tickets
                 ratings = []
                 for t in resolved_tickets:
-                    if t.room_id:
-                        for s in t.room_id.session_ids:
+                    if t.channel_id:
+                        for s in t.channel_id.session_ids:
                             if s.customer_rating:
                                 ratings.append(int(s.customer_rating))
                 avg_rat = sum(ratings) / len(ratings) if ratings else 0.0
             else:
                 avg_hours = 0.0
-                avg_msgs = 0.0
                 avg_rat = 0.0
 
             user.write({

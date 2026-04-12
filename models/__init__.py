@@ -12,9 +12,8 @@ from . import scheduled_message
 from . import marketing_campaign
 from . import customer_segment
 from . import sale_transaction
-from . import support_ticket
+from . import helpdesk_ticket
 from . import ticketing_monitoring
-from . import ticket_monitoring
 from . import res_partner
 from . import res_users
 from . import shopee_integration

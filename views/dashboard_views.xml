@@ -12,13 +12,6 @@
         <field name="view_mode">tree,form</field>
     </record>
 
-    <!-- Ticket Monitoring Action (EPIC08) -->
-    <record id="action_dke_ticket_monitoring" model="ir.actions.act_window">
-        <field name="name">Ticket Monitoring</field>
-        <field name="res_model">dke.ticket.monitoring</field>
-        <field name="view_mode">tree,form</field>
-    </record>
-
     <!-- ============================================================ -->
     <!-- Expert Staff Performance Views                                -->
     <!-- ============================================================ -->

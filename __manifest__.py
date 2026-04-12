@@ -28,6 +28,7 @@ Key Features:
         'sale',
         'contacts',
         'whatsapp',
+        'helpdesk',
     ],
     'data': [
         # Security
@@ -38,6 +39,7 @@ Key Features:
         'data/dke_crm_data.xml',
         'data/shopee_cron.xml',
         'data/dke_crm_demo_users.xml',
+        'data/helpdesk_seed_data.xml',
 
         # Views
         'views/chat_room_views.xml',
@@ -47,7 +49,6 @@ Key Features:
         'views/marketing_campaign_views.xml',
         'views/customer_segment_views.xml',
         'views/sale_transaction_views.xml',
-        'views/support_ticket_views.xml',
         'views/dashboard_views.xml',
         'views/shopee_integration_views.xml',
         'views/faq_article_views.xml',

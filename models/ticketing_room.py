@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 
+import threading
 from odoo import models, fields, api
+
+# Anti-recursion guard: prevents room.create → ticket.create → room.create loop
+_creating_ticket = threading.local()
 
 
 class TicketingRoom(models.Model):
@@ -61,14 +65,14 @@ class TicketingRoom(models.Model):
     # Relations
     message_ids = fields.One2many('dke.ticketing.message', 'room_id', string='Messages')
     session_ids = fields.One2many('dke.ticketing.session', 'room_id', string='Sessions')
-    ticket_ids = fields.One2many('dke.support.ticket', 'room_id', string='Support Tickets')
+    ticket_ids = fields.One2many('helpdesk.ticket', 'channel_id', string='Helpdesk Tickets')
     scheduled_message_ids = fields.One2many(
         'dke.scheduled.message', 'room_id', string='Scheduled Messages'
     )
 
     # 1-to-1: the primary ticket linked to this chat bubble
     ticket_id = fields.Many2one(
-        'dke.support.ticket',
+        'helpdesk.ticket',
         string='Linked Ticket',
         compute='_compute_ticket_id',
         store=False,
@@ -90,14 +94,14 @@ class TicketingRoom(models.Model):
         store=False,
     )
 
-    @api.depends('ticket_ids', 'ticket_ids.subject', 'ticket_ids.priority', 'ticket_ids.state')
+    @api.depends('ticket_ids', 'ticket_ids.name', 'ticket_ids.priority', 'ticket_ids.stage_id')
     def _compute_ticket_id(self):
         for rec in self:
             ticket = rec.ticket_ids[:1]
             rec.ticket_id = ticket
-            rec.ticket_subject = ticket.subject if ticket else ''
+            rec.ticket_subject = ticket.name if ticket else ''
             rec.ticket_priority = ticket.priority if ticket else ''
-            rec.ticket_state = ticket.state if ticket else ''
+            rec.ticket_state = ticket.stage_id.name if ticket and ticket.stage_id else ''
 
     @api.depends('customer_name')
     def _compute_initial(self):
@@ -107,6 +111,57 @@ class TicketingRoom(models.Model):
                 rec.customer_initial = ''.join([p[0].upper() for p in parts[:2]])
             else:
                 rec.customer_initial = '--'
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        rooms = super().create(vals_list)
+        # Skip auto-ticket creation if called from HelpdeskTicketExt.create()
+        if getattr(_creating_ticket, 'active', False):
+            return rooms
+        for room in rooms:
+            if not room.ticket_ids:
+                # Auto-create a linked helpdesk.ticket (with anti-recursion guard)
+                from .helpdesk_ticket import _creating_room
+                _creating_room.active = True
+                try:
+                    ticket_vals = {
+                        'name': room.name or 'Ticket',
+                        'channel_id': room.id,
+                        'priority': '0',
+                    }
+                    if room.customer_name:
+                        ticket_vals['partner_name'] = room.customer_name
+                    default_team = self.env['helpdesk.team'].sudo().search([], limit=1)
+                    if default_team:
+                        ticket_vals['team_id'] = default_team.id
+                    self.env['helpdesk.ticket'].sudo().create(ticket_vals)
+                finally:
+                    _creating_room.active = False
+        return rooms
+
+    def write(self, vals):
+        res = super().write(vals)
+        # Cascade: closing room → close linked ticket
+        if 'state' in vals and vals['state'] in ('done', 'archived'):
+            if not self.env.context.get('skip_ticket_cascade'):
+                for room in self:
+                    ticket = room.ticket_ids[:1]
+                    if ticket and ticket.stage_id and not ticket.stage_id.fold:
+                        fold_stage = self.env['helpdesk.stage'].sudo().search(
+                            [('fold', '=', True)], order='sequence asc', limit=1,
+                        )
+                        if fold_stage:
+                            ticket.sudo().with_context(skip_room_cascade=True).write({
+                                'stage_id': fold_stage.id,
+                            })
+        return res
+
+    def unlink(self):
+        """Detach ticket references before deleting rooms."""
+        for room in self:
+            for ticket in room.ticket_ids:
+                ticket.sudo().write({'channel_id': False})
+        return super().unlink()
 
     def get_active_session(self):
         """Return the currently active session for this room, or False."""
@@ -125,8 +180,8 @@ class TicketingRoom(models.Model):
 
         return {
             'id': self.id,
-            # Display name = ticket subject (chat bubble title), fallback to room name
-            'name': ticket.subject if ticket else self.name,
+            # Display name = ticket name (chat bubble title), fallback to room name
+            'name': ticket.name if ticket else self.name,
             'room_name': self.name,
             'customer_name': self.customer_name or '',
             'customer_phone': self.customer_phone or '',
@@ -140,11 +195,9 @@ class TicketingRoom(models.Model):
             'session_id': active_session.id if active_session else None,
             'session_code': active_session.session_code if active_session else None,
             'customer_rating': active_session.customer_rating if active_session else None,
-            # Ticket info
+            # Ticket info (helpdesk.ticket)
             'ticket_id': ticket.id if ticket else None,
-            'ticket_subject': ticket.subject if ticket else '',
+            'ticket_subject': ticket.name if ticket else '',
             'ticket_priority': ticket.priority if ticket else '',
-            'ticket_state': ticket.state if ticket else '',
-            'ticket_required_specialization': ticket.required_specialization if ticket else '',
-            'ticket_topic': ticket.topic if ticket else '',
+            'ticket_state': ticket.stage_id.name if ticket and ticket.stage_id else '',
         }

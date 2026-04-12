@@ -12,14 +12,6 @@
         <field name="number_increment">1</field>
     </record>
 
-    <record id="seq_support_ticket" model="ir.sequence">
-        <field name="name">Support Ticket Sequence</field>
-        <field name="code">dke.support.ticket</field>
-        <field name="prefix">TKT/</field>
-        <field name="padding">4</field>
-        <field name="number_increment">1</field>
-    </record>
-
     <!-- ============================================================ -->
     <!-- Cron Jobs                                                     -->
     <!-- ============================================================ -->
@@ -68,15 +60,6 @@
         <!-- TODO: Set code field to call transaction sync method -->
     </record>
 
-    <!-- Cron: Check overdue tickets -->
-    <record id="ir_cron_check_overdue_tickets" model="ir.cron">
-        <field name="name">DKE: Check Overdue Support Tickets</field>
-        <field name="model_id" ref="model_dke_support_ticket"/>
-        <field name="interval_number">15</field>
-        <field name="interval_type">minutes</field>
-        <field name="numbercall">-1</field>
-        <field name="active" eval="False"/>
-        <!-- TODO: Set code field to check and flag overdue tickets -->
-    </record>
+    <!-- Cron: Check overdue tickets — handled by Enterprise helpdesk SLA -->
 
 </odoo>
