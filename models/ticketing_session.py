@@ -77,3 +77,10 @@ class TicketingSession(models.Model):
             if expert_user_id:
                 vals['expert_user_id'] = expert_user_id
             rec.write(vals)
+            # Set escalated_at on linked ticket
+            if rec.room_id:
+                tickets = self.env['helpdesk.ticket'].sudo().search([
+                    ('channel_id', '=', rec.room_id.id),
+                ], limit=1)
+                if tickets and not tickets.escalated_at:
+                    tickets.write({'escalated_at': fields.Datetime.now()})

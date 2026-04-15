@@ -21,10 +21,43 @@ class HelpdeskTicketExt(models.Model):
         string='Chat Room',
         ondelete='set null',
     )
+
+    # Ticket number — generated on create
+    ticket_number = fields.Char(
+        string='Ticket Number', copy=False, readonly=True,
+    )
+
+    # SLA timestamps
+    escalated_at = fields.Datetime(string='Escalated At')
+    expert_assigned_at = fields.Datetime(string='Expert Assigned At')
+    expert_first_response_at = fields.Datetime(string='Expert First Response At')
+    expert_resolved_at = fields.Datetime(string='Expert Resolved At')
+    last_message_at = fields.Datetime(string='Last Message At')
+
+    # Resolution
     resolution_notes = fields.Html(string='Resolution Notes')
+    resolution_category = fields.Selection([
+        ('product_quality', 'Kualitas Produk'),
+        ('packaging_labeling', 'Pengemasan & Labeling'),
+        ('logistics_distribution', 'Logistik & Distribusi'),
+        ('stock_availability', 'Ketersediaan Stok'),
+        ('regulation_certification', 'Regulasi & Sertifikasi'),
+        ('billing_payment', 'Billing & Pembayaran'),
+        ('special_request', 'Permintaan Khusus'),
+        ('other', 'Lainnya'),
+    ], string='Resolution Category')
+
+    # Assignment history
+    assignment_history_ids = fields.One2many(
+        'dke.ticket.assignment.history', 'ticket_id',
+        string='Assignment History',
+    )
 
     @api.model_create_multi
     def create(self, vals_list):
+        for vals in vals_list:
+            if not vals.get('ticket_number'):
+                vals['ticket_number'] = self.env['ir.sequence'].next_by_code('dke.ticket.number') or ''
         tickets = super().create(vals_list)
         # Skip auto-room creation if called from TicketingRoom.create()
         if getattr(_creating_room, 'active', False):
@@ -66,6 +99,18 @@ class HelpdeskTicketExt(models.Model):
                 old_uid = old_user_map.get(ticket.id)
                 if new_user_id == old_uid:
                     continue  # No actual change
+
+                # Record SLA timestamp
+                ticket.expert_assigned_at = now
+
+                # Create assignment history record
+                self.env['dke.ticket.assignment.history'].sudo().create({
+                    'ticket_id': ticket.id,
+                    'assigned_from_id': old_uid or False,
+                    'assigned_to_id': new_user_id,
+                    'assigned_by_id': self.env.uid,
+                    'assigned_at': now,
+                })
 
                 # ── Room migration ──
                 # Archive old room

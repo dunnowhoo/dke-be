@@ -68,15 +68,21 @@ class ResUsers(models.Model):
                 avg_hours = sum(t.close_hours or 0 for t in resolved_tickets) / count
                 # Rating from sessions linked to the rooms of these tickets
                 ratings = []
+                total_msgs = 0
                 for t in resolved_tickets:
                     if t.channel_id:
+                        total_msgs += self.env['dke.ticketing.message'].sudo().search_count([
+                            ('room_id', '=', t.channel_id.id),
+                        ])
                         for s in t.channel_id.session_ids:
                             if s.customer_rating:
                                 ratings.append(int(s.customer_rating))
                 avg_rat = sum(ratings) / len(ratings) if ratings else 0.0
+                avg_msgs = total_msgs / count
             else:
                 avg_hours = 0.0
                 avg_rat = 0.0
+                avg_msgs = 0.0
 
             user.write({
                 'total_tickets_resolved': count,

@@ -57,7 +57,7 @@ class TicketingController(http.Controller):
 
         return {
             'id': room.id,
-            # Display name = ticket name (chat bubble title)
+            # Display name = ticket subject (chat bubble title)
             'name': ticket.name if ticket else room.name,
             'room_name': room.name,
             'customer_name': room.customer_name or '',
@@ -76,6 +76,7 @@ class TicketingController(http.Controller):
             'last_message_sender_type': preview_sender,
             # Ticket link (helpdesk.ticket)
             'ticket_id': ticket.id if ticket else None,
+            'ticket_number': ticket.ticket_number if ticket else '',
             'ticket_subject': ticket.name if ticket else '',
             'ticket_priority': ticket.priority if ticket else '',
             'ticket_state': ticket.stage_id.name if ticket and ticket.stage_id else '',
@@ -94,6 +95,7 @@ class TicketingController(http.Controller):
             'sender_type': msg.sender_type,
             'sender_id': msg.sender_id.id if msg.sender_id else None,
             'agent_name': msg.agent_name or (msg.sender_id.name if msg.sender_id else ''),
+            'sender_role': msg.sender_id.dke_role if msg.sender_id and hasattr(msg.sender_id, 'dke_role') else '',
             'content_text': msg.content_text or '',
             'message_type': msg.message_type,
             'attachment_url': att_url,
@@ -129,9 +131,11 @@ class TicketingController(http.Controller):
         return {
             'id': ticket.id,
             'name': ticket.ticket_ref or '',
+            'ticket_number': ticket.ticket_number or '',
             'subject': ticket.name or '',
             'description': ticket.description or '',
             'resolution_note': ticket.resolution_notes or '',
+            'resolution_category': ticket.resolution_category or '',
             'priority': ticket.priority or '0',
             'kanban_state': ticket.kanban_state or 'normal',
             'stage_id': [stage.id, stage.name] if stage else False,
@@ -156,6 +160,24 @@ class TicketingController(http.Controller):
             'write_date': TicketingController._fmt_dt(ticket.write_date),
             'date_closed': TicketingController._fmt_dt(ticket.close_date),
             'color': ticket.color or 0,
+            # SLA timestamps
+            'escalated_at': TicketingController._fmt_dt(ticket.escalated_at),
+            'expert_assigned_at': TicketingController._fmt_dt(ticket.expert_assigned_at),
+            'expert_first_response_at': TicketingController._fmt_dt(ticket.expert_first_response_at),
+            'expert_resolved_at': TicketingController._fmt_dt(ticket.expert_resolved_at),
+            'last_message_at': TicketingController._fmt_dt(ticket.last_message_at),
+            # Assignment history
+            'assignment_history': [{
+                'id': h.id,
+                'assigned_from': h.assigned_from_id.name if h.assigned_from_id else None,
+                'assigned_from_id': h.assigned_from_id.id if h.assigned_from_id else None,
+                'assigned_to': h.assigned_to_id.name if h.assigned_to_id else None,
+                'assigned_to_id': h.assigned_to_id.id if h.assigned_to_id else None,
+                'assigned_by': h.assigned_by_id.name if h.assigned_by_id else None,
+                'assigned_by_id': h.assigned_by_id.id if h.assigned_by_id else None,
+                'reason': h.reason or '',
+                'assigned_at': TicketingController._fmt_dt(h.assigned_at),
+            } for h in ticket.assignment_history_ids],
         }
 
     # ──────────────────────────────────────────────────────────────
@@ -341,6 +363,14 @@ class TicketingController(http.Controller):
 
             room.sudo().write({'last_message_time': now})
 
+            # Update ticket timestamps
+            ticket = request.env['helpdesk.ticket'].sudo().search([('channel_id', '=', room_id)], limit=1)
+            if ticket:
+                ticket_vals = {'last_message_at': now}
+                if user.dke_role == 'expert_staff' and not ticket.expert_first_response_at:
+                    ticket_vals['expert_first_response_at'] = now
+                ticket.write(ticket_vals)
+
             # Auto-assign if not already
             if not room.assigned_to:
                 room.sudo().write({
@@ -348,7 +378,7 @@ class TicketingController(http.Controller):
                     'is_assigned': True,
                     'assigned_at': now,
                 })
-            
+
             # Increment total_messages_sent for the user
             user.sudo().write({'total_messages_sent': (user.total_messages_sent or 0) + 1})
 
@@ -844,15 +874,34 @@ class TicketingController(http.Controller):
                     {'status': 'error', 'message': 'Ticket tidak ditemukan.'}, status=404
                 )
 
+            # Auth check: only CC creator or admin
+            user = request.env.user
+            if not user._is_admin() and ticket.create_uid.id != user.id:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya pembuat tiket yang dapat melakukan assign ulang.'}, status=403
+                )
+
             raw = request.httprequest.data
             body = json.loads(raw) if raw else {}
             user_id = body.get('user_id')
+            reason = (body.get('reason') or '').strip()
             if not user_id:
                 return request.make_json_response(
                     {'status': 'error', 'message': 'user_id wajib diisi.'}, status=400
                 )
 
+            # Store reason in context for model write to pick up
+            old_user_id = ticket.user_id.id if ticket.user_id else None
             ticket.write({'user_id': int(user_id)})
+
+            # Update assignment history with reason
+            if reason:
+                last_history = request.env['dke.ticket.assignment.history'].sudo().search([
+                    ('ticket_id', '=', ticket_id),
+                ], order='assigned_at desc', limit=1)
+                if last_history:
+                    last_history.write({'reason': reason})
+
             return request.make_json_response({
                 'status': 'success',
                 'data': self._ticket_to_dict(ticket),
@@ -1719,6 +1768,14 @@ class TicketingController(http.Controller):
 
             room.sudo().write({'last_message_time': now})
 
+            # Update ticket timestamps
+            ticket = request.env['helpdesk.ticket'].sudo().search([('channel_id', '=', room_id)], limit=1)
+            if ticket:
+                ticket_vals = {'last_message_at': now}
+                if user.dke_role == 'expert_staff' and not ticket.expert_first_response_at:
+                    ticket_vals['expert_first_response_at'] = now
+                ticket.write(ticket_vals)
+
             # Auto-assign if not already
             if not room.assigned_to:
                 room.sudo().write({
@@ -1824,6 +1881,287 @@ class TicketingController(http.Controller):
             })
         except Exception as e:
             _logger.error("get_all_staff_dashboard error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # Resolve Ticket (PBI-38)
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/ticketing/tickets/<int:ticket_id>/resolve', type='http', auth='user', methods=['PUT'], csrf=False, cors='*')
+    def resolve_ticket(self, ticket_id, **kwargs):
+        """PUT /api/ticketing/tickets/{id}/resolve — Resolve a ticket (customer_care or admin only)."""
+        try:
+            ticket = request.env['helpdesk.ticket'].sudo().browse(ticket_id)
+            if not ticket.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Ticket tidak ditemukan.'}, status=404
+                )
+
+            user = request.env.user
+            role = getattr(user, 'dke_role', '')
+            if not user._is_admin() and role != 'customer_care':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya Customer Care yang dapat menyelesaikan tiket ini.'}, status=403
+                )
+
+            raw = request.httprequest.data
+            body = json.loads(raw) if raw else {}
+            resolution_notes = (body.get('resolution_notes') or '').strip()
+            resolution_category = body.get('resolution_category', '')
+
+            if not resolution_notes:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'resolution_notes wajib diisi.'}, status=400
+                )
+
+            valid_categories = (
+                'product_quality', 'packaging_labeling', 'logistics_distribution',
+                'stock_availability', 'regulation_certification', 'billing_payment',
+                'special_request', 'other',
+            )
+            if resolution_category and resolution_category not in valid_categories:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'resolution_category tidak valid.'}, status=400
+                )
+
+            now = fields.Datetime.now()
+
+            # Find Solved stage
+            solved_stage = request.env['helpdesk.stage'].sudo().search([
+                ('name', 'ilike', 'Solved'),
+            ], limit=1)
+            if not solved_stage:
+                solved_stage = request.env['helpdesk.stage'].sudo().search([
+                    ('fold', '=', True),
+                ], order='sequence asc', limit=1)
+
+            vals = {
+                'resolution_notes': resolution_notes,
+                'expert_resolved_at': now,
+            }
+            if resolution_category:
+                vals['resolution_category'] = resolution_category
+            if solved_stage:
+                vals['stage_id'] = solved_stage.id
+                if not ticket.close_date:
+                    vals['close_date'] = now
+
+            ticket.write(vals)
+
+            # Recompute expert stats
+            if ticket.user_id:
+                ticket.user_id.sudo()._recompute_expert_stats()
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': self._ticket_to_dict(ticket),
+            })
+        except Exception as e:
+            _logger.error("resolve_ticket error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # Assignment History (PBI-18)
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/ticketing/tickets/<int:ticket_id>/assignment-history', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def get_assignment_history(self, ticket_id, **kwargs):
+        """GET /api/ticketing/tickets/{id}/assignment-history — Assignment change log."""
+        try:
+            ticket = request.env['helpdesk.ticket'].sudo().browse(ticket_id)
+            if not ticket.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Ticket tidak ditemukan.'}, status=404
+                )
+
+            history = request.env['dke.ticket.assignment.history'].sudo().search([
+                ('ticket_id', '=', ticket_id),
+            ], order='assigned_at desc')
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': [{
+                    'id': h.id,
+                    'assigned_from': h.assigned_from_id.name if h.assigned_from_id else None,
+                    'assigned_from_id': h.assigned_from_id.id if h.assigned_from_id else None,
+                    'assigned_to': h.assigned_to_id.name if h.assigned_to_id else None,
+                    'assigned_to_id': h.assigned_to_id.id if h.assigned_to_id else None,
+                    'assigned_by': h.assigned_by_id.name if h.assigned_by_id else None,
+                    'assigned_by_id': h.assigned_by_id.id if h.assigned_by_id else None,
+                    'reason': h.reason or '',
+                    'assigned_at': self._fmt_dt(h.assigned_at),
+                } for h in history],
+            })
+        except Exception as e:
+            _logger.error("get_assignment_history error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # Analytics — CC Performance (PBI-39)
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/analytics/customer-care/performance', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def get_cc_analytics(self, **kwargs):
+        """GET /api/analytics/customer-care/performance — CC performance with date filtering."""
+        try:
+            user = request.env.user
+            if user.dke_role not in ('sales_manager',) and not user._is_admin():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Akses ditolak.'}, status=403
+                )
+
+            date_from = kwargs.get('date_from')
+            date_to = kwargs.get('date_to')
+
+            care_users = request.env['res.users'].sudo().search([
+                ('dke_role', '=', 'customer_care'),
+                ('active', '=', True),
+            ])
+
+            Ticket = request.env['helpdesk.ticket'].sudo()
+            Room = request.env['dke.ticketing.room'].sudo()
+            Message = request.env['dke.ticketing.message'].sudo()
+            closed_stage_ids = request.env['helpdesk.stage'].sudo().search([('fold', '=', True)]).ids
+
+            result = []
+            for u in care_users:
+                ticket_domain = [('create_uid', '=', u.id)]
+                msg_domain = [('sender_id', '=', u.id), ('sender_type', '=', 'cs')]
+                if date_from:
+                    ticket_domain.append(('create_date', '>=', date_from))
+                    msg_domain.append(('created_at', '>=', date_from))
+                if date_to:
+                    ticket_domain.append(('create_date', '<=', date_to))
+                    msg_domain.append(('created_at', '<=', date_to))
+
+                total_tickets = Ticket.search_count(ticket_domain)
+                resolved_tickets = Ticket.search_count(ticket_domain + [('stage_id', 'in', closed_stage_ids)])
+                total_messages = Message.search_count(msg_domain)
+                active_chats = Room.search_count([
+                    ('assigned_to', '=', u.id),
+                    ('state', '=', 'active'),
+                ])
+
+                resolution_rate = round((resolved_tickets / total_tickets * 100), 1) if total_tickets > 0 else 0.0
+
+                # Rating from sessions
+                ratings = []
+                rooms = Room.search([('assigned_to', '=', u.id)])
+                for r in rooms:
+                    for s in r.session_ids:
+                        if s.customer_rating:
+                            ratings.append(int(s.customer_rating))
+                avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else 0.0
+
+                result.append({
+                    'user_id': u.id,
+                    'name': u.name,
+                    'email': u.email or u.login,
+                    'avatar_url': '/web/image/res.users/%d/avatar_128' % u.id,
+                    'total_chats_handled': total_tickets,
+                    'total_messages_sent': total_messages,
+                    'active_chats': active_chats,
+                    'avg_rating': avg_rating,
+                    'avg_response_time': u.avg_response_time or 0,
+                    'resolution_rate': resolution_rate,
+                })
+
+            result.sort(key=lambda x: -x['total_chats_handled'])
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': result,
+            })
+        except Exception as e:
+            _logger.error("get_cc_analytics error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # Analytics — Expert Performance (PBI-45)
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/analytics/expert-staff/performance', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def get_expert_analytics(self, **kwargs):
+        """GET /api/analytics/expert-staff/performance — Expert staff performance with date filtering."""
+        try:
+            user = request.env.user
+            if user.dke_role not in ('sales_manager',) and not user._is_admin():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Akses ditolak.'}, status=403
+                )
+
+            date_from = kwargs.get('date_from')
+            date_to = kwargs.get('date_to')
+
+            experts = request.env['res.users'].sudo().search([
+                ('dke_role', '=', 'expert_staff'),
+                ('active', '=', True),
+            ])
+
+            Ticket = request.env['helpdesk.ticket'].sudo()
+            closed_stage_ids = request.env['helpdesk.stage'].sudo().search([('fold', '=', True)]).ids
+
+            result = []
+            for e in experts:
+                ticket_domain = [('user_id', '=', e.id)]
+                if date_from:
+                    ticket_domain.append(('create_date', '>=', date_from))
+                if date_to:
+                    ticket_domain.append(('create_date', '<=', date_to))
+
+                total_tickets = Ticket.search_count(ticket_domain)
+                resolved_tickets = Ticket.search_count(ticket_domain + [('stage_id', 'in', closed_stage_ids)])
+                in_progress = total_tickets - resolved_tickets
+
+                resolution_rate = round((resolved_tickets / total_tickets * 100), 1) if total_tickets > 0 else 0.0
+
+                # Avg resolution time
+                resolved = Ticket.search(ticket_domain + [('stage_id', 'in', closed_stage_ids)])
+                avg_hours = 0.0
+                if resolved:
+                    avg_hours = round(sum(t.close_hours or 0 for t in resolved) / len(resolved), 2)
+
+                # Rating
+                ratings = []
+                for t in resolved:
+                    if t.channel_id:
+                        for s in t.channel_id.session_ids:
+                            if s.customer_rating:
+                                ratings.append(int(s.customer_rating))
+                avg_rating = round(sum(ratings) / len(ratings), 2) if ratings else 0.0
+
+                result.append({
+                    'user_id': e.id,
+                    'name': e.name,
+                    'email': e.email or e.login,
+                    'avatar_url': '/web/image/res.users/%d/avatar_128' % e.id,
+                    'specialization': e.dke_specialization or '',
+                    'specialization_label': self.SPECIALIZATION_LABELS.get(e.dke_specialization or '', ''),
+                    'total_tickets': total_tickets,
+                    'resolved': resolved_tickets,
+                    'in_progress': in_progress,
+                    'resolution_rate': resolution_rate,
+                    'avg_resolution_time_hours': avg_hours,
+                    'avg_rating': avg_rating,
+                    'total_messages_sent': e.total_messages_sent or 0,
+                })
+
+            result.sort(key=lambda x: -x['resolved'])
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': result,
+            })
+        except Exception as e:
+            _logger.error("get_expert_analytics error: %s", e, exc_info=True)
             return request.make_json_response(
                 {'status': 'error', 'message': str(e)}, status=500
             )

@@ -39,7 +39,6 @@ Key Features:
         'data/dke_crm_data.xml',
         'data/shopee_cron.xml',
         'data/dke_crm_demo_users.xml',
-        'data/helpdesk_seed_data.xml',
 
         # Views
         'views/chat_room_views.xml',

@@ -12,6 +12,14 @@
         <field name="number_increment">1</field>
     </record>
 
+    <record id="seq_ticket_number" model="ir.sequence">
+        <field name="name">Ticket Number Sequence</field>
+        <field name="code">dke.ticket.number</field>
+        <field name="prefix">TKT-%(year)s%(month)s%(day)s-</field>
+        <field name="padding">3</field>
+        <field name="number_increment">1</field>
+    </record>
+
     <!-- ============================================================ -->
     <!-- Cron Jobs                                                     -->
     <!-- ============================================================ -->
