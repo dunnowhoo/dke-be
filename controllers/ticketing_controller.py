@@ -104,6 +104,8 @@ class TicketingController(http.Controller):
             'attachment_mimetype': msg.attachment_mimetype or '',
             'is_read': msg.is_read,
             'read_at': TicketingController._fmt_dt(msg.read_at) if msg.read_at else None,
+            'delivered': msg.delivered,
+            'delivered_at': TicketingController._fmt_dt(msg.delivered_at) if msg.delivered_at else None,
             'send_status': msg.send_status,
             'created_at': TicketingController._fmt_dt(msg.created_at),
         }
@@ -289,8 +291,11 @@ class TicketingController(http.Controller):
             total = Msg.search_count(domain)
             messages = Msg.search(domain, limit=limit, offset=(page - 1) * limit)
 
-            # Mark unread customer messages as read
-            unread = messages.filtered(lambda m: not m.is_read and m.sender_type == 'customer')
+            # Mark unread messages from other senders as read (not just customer-type)
+            current_uid = request.env.user.id
+            unread = messages.filtered(
+                lambda m: not m.is_read and (not m.sender_id or m.sender_id.id != current_uid)
+            )
             if unread:
                 now = fields.Datetime.now()
                 unread.write({'is_read': True, 'read_at': now})
@@ -300,7 +305,7 @@ class TicketingController(http.Controller):
                     request.env,
                     'dke_ticket_room_%s' % room_id,
                     'ticketing.messages_read',
-                    {'room_id': room_id, 'message_ids': unread.ids},
+                    {'room_id': room_id, 'message_ids': unread.ids, 'read_at': now.isoformat()},
                 )
 
             return request.make_json_response({
@@ -316,6 +321,60 @@ class TicketingController(http.Controller):
             })
         except Exception as e:
             _logger.error("get_room_messages error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # Mark messages as delivered (recipient received via bus / loaded chat)
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/ticketing/messages/mark-delivered', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
+    def mark_messages_delivered(self, **kwargs):
+        """POST /api/ticketing/messages/mark-delivered — Mark messages as delivered to recipient."""
+        try:
+            raw = request.httprequest.data
+            body = json.loads(raw) if raw else {}
+            message_ids = body.get('message_ids') or []
+            if not isinstance(message_ids, list) or not message_ids:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'message_ids wajib diisi.'}, status=400
+                )
+
+            Msg = request.env['dke.ticketing.message'].sudo()
+            user_id = request.env.user.id
+            messages = Msg.browse([int(mid) for mid in message_ids]).exists()
+            # Only mark as delivered messages NOT sent by the current user and not yet delivered
+            targets = messages.filtered(
+                lambda m: not m.delivered and (not m.sender_id or m.sender_id.id != user_id)
+            )
+            if not targets:
+                return request.make_json_response({
+                    'status': 'success',
+                    'data': {'delivered_ids': []},
+                })
+
+            now = fields.Datetime.now()
+            targets.write({'delivered': True, 'delivered_at': now})
+
+            # Group by room to emit one bus event per room
+            room_to_ids = {}
+            for m in targets:
+                room_to_ids.setdefault(m.room_id.id, []).append(m.id)
+            for room_id, ids in room_to_ids.items():
+                self._notify_bus(
+                    request.env,
+                    'dke_ticket_room_%s' % room_id,
+                    'ticketing.messages_delivered',
+                    {'room_id': room_id, 'message_ids': ids, 'delivered_at': now.isoformat()},
+                )
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': {'delivered_ids': targets.ids},
+            })
+        except Exception as e:
+            _logger.error("mark_messages_delivered error: %s", e, exc_info=True)
             return request.make_json_response(
                 {'status': 'error', 'message': str(e)}, status=500
             )
@@ -358,6 +417,8 @@ class TicketingController(http.Controller):
                 'message_type': message_type,
                 'is_automated': False,
                 'send_status': 'sent',
+                'delivered': True,
+                'delivered_at': now,
                 'created_at': now,
             })
 
@@ -579,6 +640,8 @@ class TicketingController(http.Controller):
                     'content_text': message,
                     'message_type': 'text',
                     'send_status': 'sent',
+                    'delivered': True,
+                    'delivered_at': now,
                     'created_at': now,
                 })
                 user.sudo().write({'total_messages_sent': (user.total_messages_sent or 0) + 1})
@@ -1760,6 +1823,8 @@ class TicketingController(http.Controller):
                 'attachment_size': file_size,
                 'attachment_mimetype': mimetype,
                 'send_status': 'sent',
+                'delivered': True,
+                'delivered_at': now,
                 'created_at': now,
             })
 

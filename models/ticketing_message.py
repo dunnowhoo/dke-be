@@ -62,6 +62,8 @@ class TicketingMessage(models.Model):
     # Status
     is_read = fields.Boolean(string='Read', default=False, index=True)
     read_at = fields.Datetime(string='Read At')
+    delivered = fields.Boolean(string='Delivered', default=False, index=True)
+    delivered_at = fields.Datetime(string='Delivered At')
     is_automated = fields.Boolean(string='Automated Message', default=False)
     send_status = fields.Selection([
         ('sent', 'Sent'),
@@ -94,6 +96,8 @@ class TicketingMessage(models.Model):
             'attachment_mimetype': self.attachment_mimetype or '',
             'is_read': self.is_read,
             'read_at': self.read_at.isoformat() if self.read_at else None,
+            'delivered': self.delivered,
+            'delivered_at': self.delivered_at.isoformat() if self.delivered_at else None,
             'send_status': self.send_status,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
