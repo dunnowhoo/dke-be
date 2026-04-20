@@ -1979,9 +1979,18 @@ class TicketingController(http.Controller):
             resolution_notes = (body.get('resolution_notes') or '').strip()
             resolution_category = body.get('resolution_category', '')
 
+            # CS → Expert performance rating (mandatory)
+            cs_expert_rating = body.get('cs_expert_rating')
+            cs_expert_feedback = (body.get('cs_expert_feedback') or '').strip()
+
             if not resolution_notes:
                 return request.make_json_response(
                     {'status': 'error', 'message': 'resolution_notes wajib diisi.'}, status=400
+                )
+
+            if not cs_expert_rating or str(cs_expert_rating) not in ('1', '2', '3', '4', '5'):
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'cs_expert_rating wajib diisi (1-5).'}, status=400
                 )
 
             valid_categories = (
@@ -2017,6 +2026,15 @@ class TicketingController(http.Controller):
                     vals['close_date'] = now
 
             ticket.write(vals)
+
+            # Save CS→Expert rating on active session
+            if ticket.channel_id:
+                active_session = ticket.channel_id.get_active_session() if hasattr(ticket.channel_id, 'get_active_session') else None
+                if active_session:
+                    active_session.write({
+                        'cs_expert_rating': str(cs_expert_rating),
+                        'cs_expert_feedback': cs_expert_feedback,
+                    })
 
             # Recompute expert stats
             if ticket.user_id:

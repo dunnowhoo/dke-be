@@ -55,3 +55,9 @@ access_ticketing_message_expert,dke.ticketing.message.expert,model_dke_ticketing
 access_assignment_history_care,dke.ticket.assignment.history.care,model_dke_ticket_assignment_history,group_customer_care,1,1,1,0
 access_assignment_history_expert,dke.ticket.assignment.history.expert,model_dke_ticket_assignment_history,group_expert_staff,1,0,0,0
 access_assignment_history_manager,dke.ticket.assignment.history.manager,model_dke_ticket_assignment_history,group_sales_manager,1,1,1,1
+access_sla_policy_care,dke.sla.policy.care,model_dke_sla_policy,group_customer_care,1,0,0,0
+access_sla_policy_expert,dke.sla.policy.expert,model_dke_sla_policy,group_expert_staff,1,0,0,0
+access_sla_policy_manager,dke.sla.policy.manager,model_dke_sla_policy,group_sales_manager,1,1,1,1
+access_performance_record_care,dke.performance.record.care,model_dke_performance_record,group_customer_care,1,0,0,0
+access_performance_record_expert,dke.performance.record.expert,model_dke_performance_record,group_expert_staff,1,0,0,0
+access_performance_record_manager,dke.performance.record.manager,model_dke_performance_record,group_sales_manager,1,1,1,1
