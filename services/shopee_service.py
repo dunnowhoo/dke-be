@@ -454,7 +454,8 @@ class ShopeeDataService:
                 and config.shop_id and config.access_token:
 
             # ── Auto-refresh token jika hampir expired (< 10 menit) ──
-            config.refresh_token_if_needed()  # error di-log di dalam method; lanjut dengan token lama jika gagal
+            # error di-log di dalam method; lanjut dengan token lama jika gagal
+            config.refresh_token_if_needed()
 
             self._client = ShopeeClient(
                 partner_id=config.partner_id,
@@ -836,6 +837,7 @@ class ShopeeDataService:
         Order = env["shopee.order"].sudo()
         Item = env["shopee.order.item"].sudo()
         Escrow = env["shopee.order.escrow"].sudo()
+
         order_sn = order_data.get("order_sn", "")
         if not order_sn:
             raise ValueError("order_sn kosong")

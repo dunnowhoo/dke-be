@@ -5,6 +5,8 @@ from . import ticketing_message
 from . import ticketing_session
 from . import chat_room
 from . import chat_message
+from . import chat_session
+from . import customer_survey
 from . import chat_monitoring
 from . import marketplace_integration
 from . import whatsapp_config
@@ -17,6 +19,8 @@ from . import ticket_assignment_history
 from . import ticketing_monitoring
 from . import res_partner
 from . import res_users
+from . import mail_message
+from . import whatsapp_message
 from . import shopee_integration
 from . import faq_article
 from . import notification

@@ -37,7 +37,7 @@ def _serialize_user(user):
         'email': user.login,
         'phone': user.dke_phone or '',
         'role': user.dke_role,
-        'status': 'deleted' if user.dke_deleted else (user.dke_status or 'active'),
+        'status': user.dke_status or 'active',
         'specialization': user.dke_specialization or None,
         'created_at': user.create_date.isoformat() if user.create_date else None,
         'last_login': user.login_date.isoformat() if user.login_date else None,
@@ -153,13 +153,13 @@ class AccountsController(http.Controller):
             search = (search or '').strip()
             status = (status or '').strip()
 
-            domain = [('dke_role', '=', 'customer_care'), ('dke_deleted', '=', False)]
+            domain = [('dke_role', '=', 'customer_care')]
             if search:
                 domain += ['|', ('name', 'ilike', search), ('login', 'ilike', search)]
             if status in ('active', 'inactive'):
                 domain.append(('dke_status', '=', status))
 
-            Users = request.env['res.users'].sudo().with_context(active_test=False)
+            Users = request.env['res.users'].sudo()
             total = Users.search_count(domain)
             users = Users.search(domain, offset=(page - 1) * limit, limit=limit, order='create_date desc')
 
@@ -282,7 +282,7 @@ class AccountsController(http.Controller):
             status = (status or '').strip()
             specialization = (specialization or '').strip().lower()
 
-            domain = [('dke_role', '=', 'expert_staff'), ('dke_deleted', '=', False)]
+            domain = [('dke_role', '=', 'expert_staff')]
             if search:
                 domain += ['|', ('name', 'ilike', search), ('login', 'ilike', search)]
             if status in ('active', 'inactive'):
@@ -290,7 +290,7 @@ class AccountsController(http.Controller):
             if specialization in VALID_SPECIALIZATIONS:
                 domain.append(('dke_specialization', '=', specialization))
 
-            Users = request.env['res.users'].sudo().with_context(active_test=False)
+            Users = request.env['res.users'].sudo()
             total = Users.search_count(domain)
             users = Users.search(domain, offset=(page - 1) * limit, limit=limit, order='create_date desc')
 
@@ -324,7 +324,7 @@ class AccountsController(http.Controller):
         if err:
             return request.make_json_response(err)
         try:
-            user = request.env['res.users'].sudo().with_context(active_test=False).browse(user_id)
+            user = request.env['res.users'].sudo().browse(user_id)
             if not user.exists() or user.dke_role != role.replace('-', '_'):
                 return request.make_json_response(_error(404, 'User tidak ditemukan.'))
             return request.make_json_response({'status': 'success', 'data': _serialize_user(user)})
@@ -404,7 +404,7 @@ class AccountsController(http.Controller):
             return err
 
         try:
-            user = request.env['res.users'].sudo().with_context(active_test=False).browse(user_id)
+            user = request.env['res.users'].sudo().browse(user_id)
             if not user.exists():
                 return _error(404, 'User tidak ditemukan.')
 
@@ -412,7 +412,7 @@ class AccountsController(http.Controller):
             if new_status not in ('active', 'inactive'):
                 return _error(400, 'Status tidak valid. Gunakan active atau inactive.')
 
-            user.write({'dke_status': new_status, 'active': new_status == 'active'})
+            user.write({'dke_status': new_status})
             return {'status': 'success', 'data': _serialize_user(user)}
 
         except Exception as exc:
@@ -431,17 +431,17 @@ class AccountsController(http.Controller):
         cors='*',
     )
     def soft_delete(self, role, user_id, **kwargs):
-        """Soft-delete a user by setting dke_deleted=True and active=False."""
+        """Soft-delete a user by setting active=False."""
         err = _require_admin()
         if err:
             return err
 
         try:
-            user = request.env['res.users'].sudo().with_context(active_test=False).browse(user_id)
+            user = request.env['res.users'].sudo().browse(user_id)
             if not user.exists() or user.dke_role != role.replace('-', '_'):
                 return _error(404, 'User tidak ditemukan.')
 
-            user.write({'dke_deleted': True, 'dke_status': 'inactive', 'active': False})
+            user.write({'active': False, 'dke_status': 'inactive'})
             return {'status': 'success', 'message': f'Akun {user.name} berhasil dihapus.'}
 
         except Exception as exc:
