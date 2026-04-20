@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- SLA Policies: Expert Staff First Response -->
+        <record id="sla_expert_first_response_urgent" model="dke.sla.policy">
+            <field name="name">Expert First Response - Urgent</field>
+            <field name="target_type">first_response</field>
+            <field name="priority">3</field>
+            <field name="max_minutes">15</field>
+            <field name="applies_to">expert_staff</field>
+        </record>
+        <record id="sla_expert_first_response_high" model="dke.sla.policy">
+            <field name="name">Expert First Response - High</field>
+            <field name="target_type">first_response</field>
+            <field name="priority">2</field>
+            <field name="max_minutes">60</field>
+            <field name="applies_to">expert_staff</field>
+        </record>
+        <record id="sla_expert_first_response_normal" model="dke.sla.policy">
+            <field name="name">Expert First Response - Normal</field>
+            <field name="target_type">first_response</field>
+            <field name="priority">1</field>
+            <field name="max_minutes">240</field>
+            <field name="applies_to">expert_staff</field>
+        </record>
+        <record id="sla_expert_first_response_low" model="dke.sla.policy">
+            <field name="name">Expert First Response - Low</field>
+            <field name="target_type">first_response</field>
+            <field name="priority">0</field>
+            <field name="max_minutes">480</field>
+            <field name="applies_to">expert_staff</field>
+        </record>
+
+        <!-- SLA Policies: Expert Staff Resolution -->
+        <record id="sla_expert_resolution_urgent" model="dke.sla.policy">
+            <field name="name">Expert Resolution - Urgent</field>
+            <field name="target_type">resolution</field>
+            <field name="priority">3</field>
+            <field name="max_minutes">240</field>
+            <field name="applies_to">expert_staff</field>
+        </record>
+        <record id="sla_expert_resolution_high" model="dke.sla.policy">
+            <field name="name">Expert Resolution - High</field>
+            <field name="target_type">resolution</field>
+            <field name="priority">2</field>
+            <field name="max_minutes">480</field>
+            <field name="applies_to">expert_staff</field>
+        </record>
+        <record id="sla_expert_resolution_normal" model="dke.sla.policy">
+            <field name="name">Expert Resolution - Normal</field>
+            <field name="target_type">resolution</field>
+            <field name="priority">1</field>
+            <field name="max_minutes">1440</field>
+            <field name="applies_to">expert_staff</field>
+        </record>
+        <record id="sla_expert_resolution_low" model="dke.sla.policy">
+            <field name="name">Expert Resolution - Low</field>
+            <field name="target_type">resolution</field>
+            <field name="priority">0</field>
+            <field name="max_minutes">4320</field>
+            <field name="applies_to">expert_staff</field>
+        </record>
+
+        <!-- SLA Policies: Customer Care Chat Response -->
+        <record id="sla_care_chat_response" model="dke.sla.policy">
+            <field name="name">Customer Care Chat Response</field>
+            <field name="target_type">chat_response</field>
+            <field name="priority" eval="False"/>
+            <field name="max_minutes">5</field>
+            <field name="applies_to">customer_care</field>
+        </record>
+    </data>
+</odoo>

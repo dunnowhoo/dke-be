@@ -800,6 +800,64 @@ class ChatController(http.Controller):
             )
 
     # ──────────────────────────────────────────────────────────────
+    # Customer → CS Rating
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/chat/rooms/<int:room_id>/rate', type='http', auth='public', methods=['POST'], csrf=False, cors='*')
+    def rate_chat(self, room_id, **kwargs):
+        """POST /api/chat/rooms/{room_id}/rate — Submit customer rating for CS.
+
+        Body (JSON): { "rating": 1-5, "feedback": "optional text" }
+        Public auth — customer does not need Odoo login.
+        """
+        try:
+            room = request.env['dke.chat.room'].sudo().browse(room_id)
+            if not room.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                )
+
+            if room.is_rated:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat ini sudah dinilai.'}, status=400
+                )
+
+            raw = request.httprequest.data
+            body = json.loads(raw) if raw else {}
+            rating = body.get('rating')
+            feedback = (body.get('feedback') or '').strip()
+
+            if not rating or str(rating) not in ('1', '2', '3', '4', '5'):
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'rating wajib diisi (1-5).'}, status=400
+                )
+
+            room.write({
+                'customer_care_rating': str(rating),
+                'customer_care_feedback': feedback,
+                'is_rated': True,
+            })
+
+            # Recompute CS performance stats
+            if room.assigned_to:
+                room.assigned_to.sudo()._recompute_care_stats()
+
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Terima kasih atas penilaian Anda.',
+                'data': {
+                    'room_id': room.id,
+                    'rating': int(rating),
+                    'feedback': feedback,
+                },
+            })
+        except Exception as e:
+            _logger.error("rate_chat error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
     # PBI-8 (EPIC02): Schedule message
     # ──────────────────────────────────────────────────────────────
 

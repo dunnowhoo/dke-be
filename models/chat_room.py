@@ -75,7 +75,26 @@ class ChatRoom(models.Model):
         'dke.scheduled.message', 'room_id', string='Scheduled Messages'
     )
 
+<<<<<<< HEAD
+    # Customer → CS Rating (filled by customer after chat ends or timeout)
+    customer_care_rating = fields.Selection([
+        ('1', '1 - Very Poor'),
+        ('2', '2 - Poor'),
+        ('3', '3 - Average'),
+        ('4', '4 - Good'),
+        ('5', '5 - Excellent'),
+    ], string='Customer Care Rating',
+        help='Rating given by customer for Customer Care performance.')
+    customer_care_feedback = fields.Text(
+        string='Customer Care Feedback',
+        help='Optional feedback from customer about CS performance.')
+    rating_requested_at = fields.Datetime(
+        string='Rating Requested At',
+        help='When the rating prompt was sent to the customer.')
+    is_rated = fields.Boolean(string='Is Rated', default=False)
+=======
     def get_active_session(self):
         """Return active chat session for this room, or empty recordset."""
         self.ensure_one()
         return self.session_ids.filtered(lambda s: s.state == 'active')[:1]
+>>>>>>> 935213be96f7c5afcc3fa3dd5e2e9cd3416ee714
