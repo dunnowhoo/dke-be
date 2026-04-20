@@ -20,14 +20,12 @@ class ResUsers(models.Model):
     ], string='DKE Status', default='active')
 
     dke_specialization = fields.Selection([
-        ('face_wash', 'Face Wash'),
-        ('serum', 'Serum'),
-        ('lotion', 'Lotion'),
-        ('toner', 'Toner'),
+        ('teknis', 'Teknis'),
+        ('produk', 'Produk'),
+        ('pengiriman', 'Pengiriman'),
     ], string='Specialization')
 
     dke_phone = fields.Char(string='DKE Phone')
-    dke_deleted = fields.Boolean(string='Soft Deleted', default=False)
 
     # ------------------------------------------------------------------ #
     # Performance stats — stored, refreshed by _recompute_expert_stats()  #

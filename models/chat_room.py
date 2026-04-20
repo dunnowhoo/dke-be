@@ -69,7 +69,13 @@ class ChatRoom(models.Model):
 
     # Relations
     message_ids = fields.One2many('dke.chat.message', 'room_id', string='Messages')
-    ticket_ids = fields.One2many('helpdesk.ticket', 'channel_id', string='Support Tickets')
+    session_ids = fields.One2many('dke.chat.session', 'room_id', string='Sessions')
+    ticket_ids = fields.One2many('dke.support.ticket', 'room_id', string='Support Tickets')
     scheduled_message_ids = fields.One2many(
         'dke.scheduled.message', 'room_id', string='Scheduled Messages'
     )
+
+    def get_active_session(self):
+        """Return active chat session for this room, or empty recordset."""
+        self.ensure_one()
+        return self.session_ids.filtered(lambda s: s.state == 'active')[:1]

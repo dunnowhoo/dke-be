@@ -13,6 +13,12 @@ class ChatMessage(models.Model):
     _order = 'created_at asc'
 
     room_id = fields.Many2one('dke.chat.room', string='Chat Room', required=True, ondelete='cascade')
+    session_id = fields.Many2one(
+        'dke.chat.session',
+        string='Chat Session',
+        ondelete='set null',
+        help='Session this message belongs to',
+    )
     external_message_id = fields.Char(string='External Message ID', index=True)
 
     # Sender

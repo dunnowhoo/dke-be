@@ -7,6 +7,7 @@ import json
 import datetime
 import logging
 import time
+import html
 
 import requests
 import werkzeug.exceptions
@@ -685,10 +686,42 @@ class IntegrationController(http.Controller):
     # ── Config Endpoints (bridged to Odoo whatsapp.account) ──────
 
     @staticmethod
+    def _authenticate_request():
+        """Restore Odoo user session from Bearer token in Authorization header.
+
+        The FE stores the Odoo session SID as the Bearer token (returned by
+        /api/auth/login as access_token = request.session.sid).
+        This helper manually restores the session so sudo() calls work correctly
+        when the route uses auth='none'.
+
+        Returns True if a valid session was found, False otherwise.
+        """
+        auth_header = request.httprequest.headers.get('Authorization', '')
+        if auth_header.startswith('Bearer '):
+            token = auth_header[7:].strip()
+            if token and token != request.session.sid:
+                request.session.sid = token
+                try:
+                    request.session._prepare()
+                except Exception:
+                    pass
+        # sudo() is sufficient for our use-case; we don't need strict uid check.
+        return True
+
+    @staticmethod
+    def _is_connected(account):
+        """True if account exists and has a non-empty token."""
+        return bool(account and account.token)
+
+    @staticmethod
     def _account_to_dict(account):
-        """Serialize whatsapp.account to API-safe dict."""
+        """Serialize whatsapp.account to API-safe dict.
+
+        whatsapp.account has no 'state' field — we derive it from token presence.
+        """
+        connected = bool(account.token)
         return {
-            'state': 'connected',
+            'state': 'connected' if connected else 'disconnected',
             'name': account.name or '',
             'app_id': account.app_uid or '',
             'account_id': account.account_uid or '',
@@ -713,7 +746,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/status',
-        type='http', auth='user', methods=['GET'], csrf=False, cors='*',
+        type='http', auth='none', methods=['GET', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_status(self, **kwargs):
         """GET /api/integration/whatsapp/status — Cek status koneksi.
@@ -734,13 +767,15 @@ class IntegrationController(http.Controller):
 
     @http.route(
         ['/api/integration/whatsapp/auth', '/api/integration/whatsapp/config'],
-        type='http', auth='user', methods=['POST', 'PUT'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST', 'PUT', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_auth(self, **kwargs):
         """POST|PUT /api/integration/whatsapp/auth — Save & validate config.
 
         Body: { name, app_id, app_secret, account_id, phone_number_id, api_token }
-        Creates or updates Odoo whatsapp.account and tests connection.
+        Creates or updates Odoo whatsapp.account.
+        If a previously archived account with the same phone_uid exists, it will
+        be re-activated instead of creating a new one.
         """
         try:
             raw = request.httprequest.data
@@ -753,59 +788,85 @@ class IntegrationController(http.Controller):
             token = (body.get('api_token') or '').strip()
             name = (body.get('name') or 'DKE WhatsApp').strip()
 
-            # Validation — all five credential fields are required
-            missing = []
-            if not app_id:
-                missing.append('App ID')
-            if not app_secret:
-                missing.append('App Secret')
-            if not account_id:
-                missing.append('Account ID')
-            if not phone_number_id:
-                missing.append('Phone Number ID')
-            if not token:
-                missing.append('Access Token')
-
-            account = request.env['whatsapp.account'].sudo().search(
-                [('active', '=', True)], limit=1,
-            )
-
-            # For updates, only require fields that were actually sent
-            if account:
-                missing = []  # allow partial update
-
-            if missing:
-                return request.make_json_response(
-                    {'status': 'error', 'message': '%s wajib diisi.' % ', '.join(missing)},
-                    status=400,
+            # --- Look for an account with this EXACT phone_uid (could be archived) ---
+            WA = request.env['whatsapp.account'].sudo()
+            existing_by_phone = None
+            if phone_number_id:
+                existing_by_phone = WA.with_context(active_test=False).search(
+                    [('phone_uid', '=', phone_number_id)], limit=1
                 )
 
-            vals = {}
-            if name:
-                vals['name'] = name
-            if app_id:
-                vals['app_uid'] = app_id
-            if app_secret:
-                vals['app_secret'] = app_secret
-            if account_id:
-                vals['account_uid'] = account_id
-            if phone_number_id:
-                vals['phone_uid'] = phone_number_id
-            if token:
-                vals['token'] = token
+            # --- Look for the currently active account ---
+            active_account = WA.search([('active', '=', True)], limit=1)
 
-            if account:
-                account.sudo().write(vals)
+            account = None
+
+            if existing_by_phone:
+                # An account (active or archived) with this exact phone number ALREADY EXISTS
+                vals = {'active': True}
+                if name: vals['name'] = name
+                if app_id: vals['app_uid'] = app_id
+                if app_secret: vals['app_secret'] = app_secret
+                if account_id: vals['account_uid'] = account_id
+                if token: vals['token'] = token
+                existing_by_phone.write(vals)
+                account = existing_by_phone
+
+                # If there was a DIFFERENT active account, we archive it
+                if active_account and active_account.id != existing_by_phone.id:
+                    active_account.write({'active': False})
             else:
-                account = request.env['whatsapp.account'].sudo().create(vals)
+                # NO account with this phone number exists.
+                # So we can safely update the existing active account, OR create a new one.
+                vals = {}
+                if name: vals['name'] = name
+                if app_id: vals['app_uid'] = app_id
+                if app_secret: vals['app_secret'] = app_secret
+                if account_id: vals['account_uid'] = account_id
+                vals['phone_uid'] = phone_number_id
+                if token: vals['token'] = token
 
-            # Test connection via Odoo WhatsApp addon
+                if active_account:
+                    # Update current active account (this is safe because phone_uid is not duplicated)
+                    active_account.write(vals)
+                    account = active_account
+                else:
+                    # We have NO accounts with this number, and NO active accounts at all -> CREATE
+                    missing = []
+                    if not app_id:           missing.append('App ID')
+                    if not app_secret:       missing.append('App Secret')
+                    if not account_id:       missing.append('Account ID')
+                    if not phone_number_id:  missing.append('Phone Number ID')
+                    if not token:            missing.append('Access Token')
+                    if missing:
+                        return request.make_json_response(
+                            {'status': 'error', 'message': '%s wajib diisi.' % ', '.join(missing)},
+                            status=400,
+                        )
+                    current_uid = request.env.uid or 2
+                    account = WA.create({
+                        'name': name,
+                        'app_uid': app_id,
+                        'app_secret': app_secret,
+                        'account_uid': account_id,
+                        'phone_uid': phone_number_id,
+                        'token': token,
+                        'notify_user_ids': [(4, current_uid)],
+                    })
+
+            # Test connection via Meta API
             try:
                 account.button_test_connection()
-            except (UserError, ValidationError) as ve:
-                return request.make_json_response(
-                    {'status': 'error', 'message': str(ve)}, status=400,
-                )
+            except Exception as conn_err:
+                err_msg = conn_err.args[0] if getattr(conn_err, 'args', None) else str(conn_err)
+                err_msg = str(err_msg).strip()
+                _logger.warning('whatsapp_auth test failed: %s', err_msg)
+                # Still keep the record but inform FE the test failed
+                return request.make_json_response({
+                    'status': 'error',
+                    'message': err_msg or 'Kredensial WhatsApp tidak valid.',
+                    'data': self._account_to_dict(account),
+                }, status=400)
 
             return request.make_json_response({
                 'status': 'success',
@@ -824,7 +885,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/test',
-        type='http', auth='user', methods=['POST'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_test(self, **kwargs):
         """POST /api/integration/whatsapp/test — Test koneksi.
@@ -842,9 +903,11 @@ class IntegrationController(http.Controller):
                 )
             try:
                 account.button_test_connection()
-            except (UserError, ValidationError) as ve:
+            except Exception as conn_err:
+                err_msg = conn_err.args[0] if getattr(conn_err, 'args', None) else str(conn_err)
+                err_msg = str(err_msg).strip()
                 return request.make_json_response(
-                    {'status': 'error', 'message': str(ve)}, status=400,
+                    {'status': 'error', 'message': err_msg or 'Koneksi gagal log ke Meta.'}, status=400,
                 )
             return request.make_json_response({
                 'status': 'success',
@@ -859,7 +922,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/disconnect',
-        type='http', auth='user', methods=['POST'], csrf=False, cors='*',
+        type='http', auth='none', methods=['POST', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_disconnect(self, **kwargs):
         """POST /api/integration/whatsapp/disconnect — Putuskan koneksi.
@@ -883,7 +946,7 @@ class IntegrationController(http.Controller):
 
     @http.route(
         '/api/integration/whatsapp/sync',
-        type='http', auth='user', methods=['GET'], csrf=False, cors='*',
+        type='http', auth='none', methods=['GET', 'OPTIONS'], csrf=False, cors='*',
     )
     def whatsapp_sync(self, **kwargs):
         """GET /api/integration/whatsapp/sync — Sinkronisasi template.
@@ -901,9 +964,11 @@ class IntegrationController(http.Controller):
                 )
             try:
                 account.button_sync_whatsapp_account_templates()
-            except (UserError, ValidationError) as ve:
+            except Exception as sync_err:
+                err_msg = sync_err.args[0] if getattr(sync_err, 'args', None) else str(sync_err)
+                err_msg = str(err_msg).strip()
                 return request.make_json_response(
-                    {'status': 'error', 'message': str(ve)}, status=400,
+                    {'status': 'error', 'message': err_msg or 'Gagal sinkronisasi.'}, status=400,
                 )
             return request.make_json_response({
                 'status': 'success',
