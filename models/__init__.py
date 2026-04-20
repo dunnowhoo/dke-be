@@ -12,6 +12,7 @@ from . import marketplace_integration
 from . import whatsapp_config
 from . import scheduled_message
 from . import marketing_campaign
+from . import wa_template
 from . import customer_segment
 from . import sale_transaction
 from . import helpdesk_ticket

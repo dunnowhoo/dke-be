@@ -431,9 +431,9 @@ class ShopeeDataService:
     service otomatis fallback ke dummy data.
     """
     _VALID_ORDER_STATUS = {
-        "UNPAID", "READY_TO_SHIP", "PROCESSED", "SHIPPED",
-        "TO_CONFIRM_RECEIVE", "COMPLETED", "IN_CANCEL", "CANCELLED",
-        "TO_RETURN", "INVOICE_PENDING",
+        "UNPAID", "READY_TO_SHIP", "RETRY_SHIP", "PROCESSED", "SHIPPED",
+        "TO_CONFIRM_RECEIVE", "TO_RETURN", "COMPLETED", "IN_CANCEL", "CANCELLED",
+        "INVOICE_PENDING",
     }
 
 
@@ -858,6 +858,14 @@ class ShopeeDataService:
             "shipping_carrier":        order_data.get("shipping_carrier", ""),
             "tracking_number":         order_data.get("tracking_number") or order_data.get("tracking_no", ""),
             "note":                    order_data.get("note", ""),
+            "message_to_seller":       order_data.get("message_to_seller", ""),
+            "dropshipper":             order_data.get("dropshipper", ""),
+            "payment_method":          order_data.get("payment_method", ""),
+            "cod":                     bool(order_data.get("cod", False)),
+            "fulfillment_flag":        order_data.get("fulfillment_flag", ""),
+            "days_to_ship":            order_data.get("days_to_ship", 0),
+            "ship_by_date":            order_data.get("ship_by_date", 0),
+            "pickup_done_time":        order_data.get("pickup_done_time", 0),
             "recipient_name":          order_data.get("recipient_name") or addr.get("name", ""),
             "recipient_phone":         order_data.get("recipient_phone") or addr.get("phone", ""),
             "recipient_full_address":  order_data.get("recipient_full_address") or addr.get("full_address", ""),
