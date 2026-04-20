@@ -53,6 +53,13 @@ class AuthController(http.Controller):
 
             user = request.env['res.users'].sudo().browse(uid)
 
+            # Block soft-deleted/non-active users for this custom API flow.
+            is_active_user = bool(user.exists() and user.active)
+            is_active_status = (user.dke_status or 'active') == 'active'
+            if not is_active_user or not is_active_status:
+                request.session.logout(keep_db=True)
+                return _error(403, 'Akun nonaktif atau sudah dihapus.')
+
             # Determine role string
             dke_role = user.dke_role or ('admin' if user._is_admin() else None)
 
@@ -111,6 +118,10 @@ class AuthController(http.Controller):
     def me(self, **kwargs):
         """Return current authenticated user's profile."""
         user = request.env.user
+        if not user.active or (user.dke_status or 'active') != 'active':
+            request.session.logout(keep_db=True)
+            return _error(403, 'Akun nonaktif atau sudah dihapus.')
+
         dke_role = user.dke_role or ('admin' if user._is_admin() else None)
         return {
             'status': 'success',

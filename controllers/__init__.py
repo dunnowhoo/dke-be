@@ -8,9 +8,7 @@ from . import marketing_controller
 from . import sales_controller
 from . import integration_controller
 from . import faq_controller
-<<<<<<< HEAD
+from . import announcement_controller
 from . import performance_controller
-=======
 from . import bus_controller
->>>>>>> 935213be96f7c5afcc3fa3dd5e2e9cd3416ee714
 from . import products_controller

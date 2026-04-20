@@ -70,7 +70,6 @@ class ChatRoom(models.Model):
     # Relations
     message_ids = fields.One2many('dke.chat.message', 'room_id', string='Messages')
     session_ids = fields.One2many('dke.chat.session', 'room_id', string='Sessions')
-    ticket_ids = fields.One2many('dke.support.ticket', 'room_id', string='Support Tickets')
     scheduled_message_ids = fields.One2many(
         'dke.scheduled.message', 'room_id', string='Scheduled Messages'
     )

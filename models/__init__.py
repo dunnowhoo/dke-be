@@ -25,5 +25,6 @@ from . import whatsapp_message
 from . import shopee_integration
 from . import faq_article
 from . import notification
+from . import announcement
 from . import sla_policy
 from . import performance_record
