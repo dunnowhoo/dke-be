@@ -61,3 +61,5 @@ access_sla_policy_manager,dke.sla.policy.manager,model_dke_sla_policy,group_sale
 access_performance_record_care,dke.performance.record.care,model_dke_performance_record,group_customer_care,1,0,0,0
 access_performance_record_expert,dke.performance.record.expert,model_dke_performance_record,group_expert_staff,1,0,0,0
 access_performance_record_manager,dke.performance.record.manager,model_dke_performance_record,group_sales_manager,1,1,1,1
+access_wa_template_care,dke.wa.template.care,model_dke_wa_template,group_customer_care,1,0,0,0
+access_wa_template_manager,dke.wa.template.manager,model_dke_wa_template,group_sales_manager,1,1,1,1
