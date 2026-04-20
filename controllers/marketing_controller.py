@@ -5,9 +5,7 @@ import json
 import logging
 import re
 
-import requests as _requests
-
-from odoo import http
+from odoo import http, Command
 from odoo.http import request
 from odoo.addons.phone_validation.tools import phone_validation
 
@@ -844,12 +842,6 @@ class MarketingController(http.Controller):
                         failed += 1
                         _logger.warning('[Marketing TEST MODE] Could not create note for partner %s: %s', partner.id, note_exc)
             else:
-                meta_url = 'https://graph.facebook.com/v21.0/%s/messages' % wa_account.phone_uid
-                headers = {
-                    'Authorization': 'Bearer %s' % wa_account.token,
-                    'Content-Type': 'application/json',
-                }
-
                 for partner in partners:
                     raw_phone = partner.mobile or partner.phone
                     if not raw_phone:
@@ -869,35 +861,37 @@ class MarketingController(http.Controller):
                         failed += 1
                         continue
 
-                    # Meta expects E.164 without the leading '+'
-                    phone_e164 = formatted.lstrip('+')
+                    # Odoo whatsapp.message stores mobile_number without leading '+'
+                    phone_no_plus = formatted.lstrip('+')
 
                     try:
-                        template_vals, _attachment = template._get_send_template_vals(
-                            record=partner, free_text_json={}, attachment=False,
-                        )
-                    except Exception as tpl_exc:
-                        failed += 1
-                        _logger.warning('[Marketing] Could not build template vals for partner %s: %s', partner.id, tpl_exc)
-                        continue
-
-                    payload = {
-                        'messaging_product': 'whatsapp',
-                        'to': phone_e164,
-                        'type': 'template',
-                        'template': template_vals,
-                    }
-
-                    try:
-                        resp = _requests.post(meta_url, headers=headers, json=payload, timeout=10)
-                        if resp.status_code == 200:
-                            sent += 1
-                        else:
+                        mail_msg = request.env['mail.message'].sudo().create({
+                            'model': 'res.partner',
+                            'res_id': partner.id,
+                            'body': template.body or '',
+                            'message_type': 'whatsapp_message',
+                            'subtype_id': request.env.ref('mail.mt_note').id,
+                            'partner_ids': [Command.link(partner.id)],
+                        })
+                        wa_msg = request.env['whatsapp.message'].sudo().create({
+                            'mail_message_id': mail_msg.id,
+                            'mobile_number': phone_no_plus,
+                            'wa_template_id': template.id,
+                            'wa_account_id': wa_account.id,
+                        })
+                        wa_msg._send()
+                        wa_msg.invalidate_recordset(['state', 'failure_reason'])
+                        if wa_msg.state == 'error':
                             failed += 1
-                            _logger.warning('[Marketing] Meta send failed for %s: %s', phone_e164, resp.text)
-                    except _requests.exceptions.RequestException as req_exc:
+                            _logger.warning(
+                                '[Marketing] WA message error for partner %s: %s',
+                                partner.id, wa_msg.failure_reason or 'unknown',
+                            )
+                        else:
+                            sent += 1
+                    except Exception as partner_exc:
                         failed += 1
-                        _logger.warning('[Marketing] Request error for %s: %s', phone_e164, req_exc)
+                        _logger.warning('[Marketing] Failed to send to partner %s: %s', partner.id, partner_exc)
 
                 if sent == 0 and failed > 0:
                     return request.make_json_response(
