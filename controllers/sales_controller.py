@@ -155,7 +155,7 @@ class SalesController(http.Controller):
         self._require_sales_access()
         try:
             page = int(kwargs.get("page", 1))
-            limit = min(int(kwargs.get("limit", 20)), 100)
+            limit = min(int(kwargs.get("limit", 10)), 100)
             offset = (page - 1) * limit
             status_filter = kwargs.get("status")
             sort_by = kwargs.get("sort_by", "create_time")
@@ -248,6 +248,8 @@ class SalesController(http.Controller):
                     {"status": "error", "message": "Order tidak ditemukan."}, status=404
                 )
 
+            status_history = []
+
             # Items
             items = []
             for item in order.order_item_ids:
@@ -309,10 +311,17 @@ class SalesController(http.Controller):
                     "zipcode": order.recipient_zipcode,
                 },
                 "note": order.note,
+                "message_to_seller": order.message_to_seller,
+                "payment_method": order.payment_method,
+                "cod": order.cod,
+                "fulfillment_flag": order.fulfillment_flag,
+                "ship_by_date": order.ship_by_date,
+                "pickup_done_time": order.pickup_done_time,
                 "dropshipper": order.dropshipper,
                 "items_subtotal": order.items_subtotal,
                 "items": items,
                 "escrow": escrow,
+                "status_history": status_history,
             }
 
             return request.make_json_response({"status": "success", "data": data})

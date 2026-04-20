@@ -325,8 +325,19 @@ class ShopeeOrder(models.Model):
     recipient_state = fields.Char(string="Province")
     recipient_zipcode = fields.Char(string="ZIP Code")
 
+    # ── Pembayaran ────────────────────────────────────────────────────────────
+    payment_method = fields.Char(string="Payment Method")
+    cod = fields.Boolean(string="Cash on Delivery", default=False)
+
+    # ── Pengiriman Lanjutan ───────────────────────────────────────────────────
+    fulfillment_flag = fields.Char(string="Fulfillment Type")
+    days_to_ship = fields.Integer(string="SLA Days to Ship")
+    ship_by_date = fields.Integer(string="Ship By Date (Unix)")
+    pickup_done_time = fields.Integer(string="Pickup Done Time (Unix)")
+
     # ── Misc ─────────────────────────────────────────────────────────────────
     note = fields.Text(string="Buyer Note")
+    message_to_seller = fields.Text(string="Message to Seller")
     dropshipper = fields.Char(string="Dropshipper Name")
 
     # ── Relasi ───────────────────────────────────────────────────────────────

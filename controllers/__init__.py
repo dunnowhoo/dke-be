@@ -13,3 +13,4 @@ from . import performance_controller
 =======
 from . import bus_controller
 >>>>>>> 935213be96f7c5afcc3fa3dd5e2e9cd3416ee714
+from . import products_controller
