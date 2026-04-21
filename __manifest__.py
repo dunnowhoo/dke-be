@@ -1,6 +1,6 @@
 {
     'name': 'DKE Smart Sales Platform',
-    'version': '17.0.1.0.0',
+    'version': '17.0.1.0.1',
     'category': 'Sales/CRM',
     'summary': 'AI-Powered Omnichannel Sales & Customer Engagement System',
     'description': """
