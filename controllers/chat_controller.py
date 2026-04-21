@@ -399,6 +399,10 @@ class ChatController(http.Controller):
     # PBI-2: List chat rooms
     # ──────────────────────────────────────────────────────────────
 
+    # One sync per process; tracks last run timestamp to avoid hammering DB on every list call
+    _last_sync_ts: float = 0.0
+    _SYNC_THROTTLE_SECS: float = 30.0  # re-sync at most once per 30 s
+
     @http.route('/api/chat/list', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
     def get_chat_list(self, **kwargs):
         """GET /api/chat/list — List all chat rooms with pagination.
@@ -412,8 +416,12 @@ class ChatController(http.Controller):
           - search : string — cari customer_name / phone (optional)
         """
         try:
-            # Sync native WA discuss channels → dke.chat.room
-            self._sync_whatsapp_channels()
+            # Throttle expensive WA sync — run at most once per 30 s per Odoo process
+            import time as _time
+            now_ts = _time.monotonic()
+            if now_ts - ChatController._last_sync_ts >= ChatController._SYNC_THROTTLE_SECS:
+                self._sync_whatsapp_channels()
+                ChatController._last_sync_ts = now_ts
 
             page = max(int(kwargs.get('page', 1)), 1)
             limit = min(int(kwargs.get('limit', 20)), 100)
@@ -459,12 +467,17 @@ class ChatController(http.Controller):
     def get_room_messages(self, room_id, **kwargs):
         """GET /api/chat/rooms/{room_id}/messages — Get full message history.
 
-        EPIC02 - PBI-20: Returns all messages, marks unread messages as read,
-                         resets unread_count on the room.
+        EPIC02 - PBI-20: Returns messages in ascending order (oldest→newest).
+        By default returns the LATEST `limit` messages so the chat opens at
+        the bottom. Use `before_id` to page backward (load older messages).
+        Use `after_id` for incremental real-time append (SSE/polling).
+
         Query Params:
-          - page     : int (default 1)
-          - limit    : int (default 50)
-          - after_id : int (optional) — return only messages with id > after_id
+          - limit     : int (default 50, max 200)
+          - after_id  : int (optional) — return only messages with id > after_id
+          - before_id : int (optional) — return only messages with id < before_id
+                        (load-more-upward; returns up to `limit` messages
+                         immediately before that id, sorted asc so FE can prepend)
         """
         try:
             room = request.env['dke.chat.room'].sudo().browse(room_id)
@@ -473,9 +486,9 @@ class ChatController(http.Controller):
                     {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
                 )
 
-            page = max(int(kwargs.get('page', 1)), 1)
             limit = min(int(kwargs.get('limit', 50)), 200)
             after_id = int(kwargs.get('after_id', 0))
+            before_id = int(kwargs.get('before_id', 0))
 
             # If the room is linked to a native discuss.channel,
             # read messages from mail.message instead of dke.chat.message.
@@ -487,13 +500,22 @@ class ChatController(http.Controller):
                     ('message_type', 'in', ('comment', 'whatsapp_message')),
                 ]
                 if after_id:
+                    # Real-time incremental: newer messages only
                     msg_domain.append(('id', '>', after_id))
-                total = MailMsg.search_count(msg_domain)
-                mail_msgs = MailMsg.search(
-                    msg_domain, limit=limit,
-                    offset=(page - 1) * limit if not after_id else 0,
-                    order='create_date asc',
-                )
+                    total = MailMsg.search_count(msg_domain)
+                    mail_msgs = MailMsg.search(msg_domain, limit=limit, order='create_date asc')
+                elif before_id:
+                    # Load-more upward: older messages before cursor
+                    msg_domain.append(('id', '<', before_id))
+                    total = MailMsg.search_count(msg_domain)
+                    # Fetch latest `limit` of the older batch, then reverse to asc
+                    mail_msgs = MailMsg.search(msg_domain, limit=limit, order='create_date desc')
+                    mail_msgs = mail_msgs[::-1]
+                else:
+                    # Initial load: latest `limit` messages, returned asc
+                    total = MailMsg.search_count(msg_domain)
+                    mail_msgs = MailMsg.search(msg_domain, limit=limit, order='create_date desc')
+                    mail_msgs = mail_msgs[::-1]
                 data = [
                     self._discuss_msg_to_dict(m, room.discuss_channel_id)
                     for m in mail_msgs
@@ -502,12 +524,21 @@ class ChatController(http.Controller):
                 Msg = request.env['dke.chat.message'].sudo()
                 domain = [('room_id', '=', room_id)]
                 if after_id:
+                    # Real-time incremental
                     domain.append(('id', '>', after_id))
-                total = Msg.search_count(domain)
-                messages = Msg.search(
-                    domain, limit=limit,
-                    offset=(page - 1) * limit if not after_id else 0,
-                )
+                    total = Msg.search_count(domain)
+                    messages = Msg.search(domain, limit=limit, order='created_at asc')
+                elif before_id:
+                    # Load-more upward
+                    domain.append(('id', '<', before_id))
+                    total = Msg.search_count(domain)
+                    messages = Msg.search(domain, limit=limit, order='created_at desc')
+                    messages = messages[::-1]
+                else:
+                    # Initial load: latest messages
+                    total = Msg.search_count(domain)
+                    messages = Msg.search(domain, limit=limit, order='created_at desc')
+                    messages = messages[::-1]
 
                 # Mark unread customer messages as read
                 unread = messages.filtered(lambda m: not m.is_read and m.sender_type == 'customer')
@@ -517,14 +548,30 @@ class ChatController(http.Controller):
 
                 data = [self._message_to_dict(m) for m in messages]
 
+            has_more_above = False
+            if data and not after_id:
+                # There are older messages if first message id is not the oldest
+                first_id = data[0]['id'] if data else 0
+                if room.discuss_channel_id:
+                    has_more_above = bool(request.env['mail.message'].sudo().search_count([
+                        ('model', '=', 'discuss.channel'),
+                        ('res_id', '=', room.discuss_channel_id.id),
+                        ('message_type', 'in', ('comment', 'whatsapp_message')),
+                        ('id', '<', first_id),
+                    ])) if first_id else False
+                else:
+                    has_more_above = bool(request.env['dke.chat.message'].sudo().search_count([
+                        ('room_id', '=', room_id),
+                        ('id', '<', first_id),
+                    ])) if first_id else False
+
             return request.make_json_response({
                 'status': 'success',
                 'room': self._room_to_dict(room),
                 'meta': {
                     'total': total,
-                    'page': page,
                     'limit': limit,
-                    'pages': -(-total // limit) if total else 0,
+                    'has_more_above': has_more_above,
                 },
                 'data': data,
             })
