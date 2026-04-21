@@ -171,7 +171,7 @@ class MarketingController(http.Controller):
             discount_type   (str) 'fixed' | 'percent'
             discount_value  (float)
             image_file      (file, JPG/PNG, max 2 MB)
-            target_segment  (int)  segment_id
+            contact_ids     (str, JSON)  e.g. "[1,2,3]"
 
         Response 201: { campaign_id, image_url }
         Response 400: { error, message }
@@ -272,14 +272,15 @@ class MarketingController(http.Controller):
                     status=400,
                 )
 
-            # ── Target segment ────────────────────────────────────────────
-            raw_segment = kwargs.get('target_segment')
-            segment_id = False
-            if raw_segment:
-                try:
-                    segment_id = int(raw_segment)
-                except (ValueError, TypeError):
-                    segment_id = False
+            # ── Manual contact selection ──────────────────────────────────
+            raw_contact_ids = kwargs.get('contact_ids') or '[]'
+            contact_ids = []
+            try:
+                parsed = json.loads(raw_contact_ids)
+                if isinstance(parsed, list):
+                    contact_ids = [int(i) for i in parsed if str(i).isdigit() or isinstance(i, int)]
+            except (ValueError, TypeError):
+                contact_ids = []
 
             # ── WhatsApp template ─────────────────────────────────────────
             wa_body = (kwargs.get('body') or '').strip()
@@ -346,18 +347,20 @@ class MarketingController(http.Controller):
                     )
 
             # ── Create campaign record ────────────────────────────────────
+            has_contacts = bool(contact_ids)
             vals = {
                 'name': title,
                 'description': kwargs.get('description') or '',
                 'discount_type': discount_type or False,
                 'discount_value': discount_value,
-                'state': 'draft',
+                'state': 'targeted' if has_contacts else 'draft',
+                'matched_count': len(contact_ids) if has_contacts else 0,
                 'created_by_id': request.env.user.id,
             }
             if product:
                 vals['product_id'] = product.id
-            if segment_id:
-                vals['segment_id'] = segment_id
+            if has_contacts:
+                vals['target_audience_ids'] = [(6, 0, contact_ids)]
             if attachment:
                 vals['image_url'] = image_url
             if wa_template:
@@ -456,8 +459,6 @@ class MarketingController(http.Controller):
                     'discount_value': c.discount_value,
                     'product_id': c.product_id.id if c.product_id else None,
                     'product_name': c.product_id.name if c.product_id else None,
-                    'segment_id': c.segment_id.id if c.segment_id else None,
-                    'segment_name': c.segment_id.name if c.segment_id else None,
                     'image_url': c.image_url or None,
                     'sent_count': c.sent_count,
                     'failed_count': c.failed_count,
@@ -538,6 +539,84 @@ class MarketingController(http.Controller):
 
         except Exception as exc:
             _logger.exception('[Marketing] list_products error: %s', exc)
+            return request.make_json_response(
+                {'error': 'server_error', 'message': str(exc)},
+                status=500,
+            )
+
+    # ======================================================================
+    # GET /api/marketing/contacts  — Contact search for campaign targeting
+    # ======================================================================
+
+    @http.route(
+        '/api/marketing/contacts',
+        type='http',
+        auth='user',
+        methods=['GET'],
+        csrf=False,
+        cors='*',
+    )
+    def list_contacts(self, **kwargs):
+        """GET /api/marketing/contacts — Cari kontak untuk target campaign.
+
+        Query Params:
+            q       (str)  search by name, phone, or mobile
+            page    (int, default=1)
+            limit   (int, default=20, max=50)
+
+        Response 200:
+        {
+            "contacts": [{ "id", "name", "phone", "mobile", "email" }, ...],
+            "total": int,
+            "page": int,
+            "limit": int
+        }
+        """
+        try:
+            q = (kwargs.get('q') or '').strip()
+            page = max(1, int(kwargs.get('page', 1)))
+            limit = min(int(kwargs.get('limit', 20)), 50)
+            offset = (page - 1) * limit
+
+            domain = [
+                ('active', '=', True),
+                '|', ('mobile', '!=', False), ('phone', '!=', False),
+            ]
+            if q:
+                domain = [
+                    ('active', '=', True),
+                    '|', ('mobile', '!=', False), ('phone', '!=', False),
+                    '|', '|',
+                    ('name', 'ilike', q),
+                    ('mobile', 'ilike', q),
+                    ('phone', 'ilike', q),
+                ]
+
+            total = request.env['res.partner'].sudo().search_count(domain)
+            partners = request.env['res.partner'].sudo().search(
+                domain, limit=limit, offset=offset, order='name asc'
+            )
+
+            contacts = [
+                {
+                    'id': p.id,
+                    'name': p.name,
+                    'phone': p.phone or None,
+                    'mobile': p.mobile or None,
+                    'email': p.email or None,
+                }
+                for p in partners
+            ]
+
+            return request.make_json_response({
+                'contacts': contacts,
+                'total': total,
+                'page': page,
+                'limit': limit,
+            })
+
+        except Exception as exc:
+            _logger.exception('[Marketing] list_contacts error: %s', exc)
             return request.make_json_response(
                 {'error': 'server_error', 'message': str(exc)},
                 status=500,
@@ -929,25 +1008,6 @@ class MarketingController(http.Controller):
                 status=500,
             )
 
-    @http.route('/api/marketing/segmentation/preview', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
-    def preview_segmentation(self, **kwargs):
-        """POST /api/marketing/segmentation/preview — Preview customer segment.
-
-        PBI-7: Translates filter rules to SQL, returns matched count and sample.
-        Request Body: { "rules": [{ "field": "...", "operator": "...", "value": ... }] }
-        """
-        # TODO: Implement dynamic segmentation query
-        return request.make_json_response({'status': 'ok', 'matched_count': 0, 'sample': []})
-
-    @http.route('/api/marketing/campaigns/<int:campaign_id>/target', type='http', auth='user', methods=['PUT'], csrf=False, cors='*')
-    def save_target(self, campaign_id, **kwargs):
-        """PUT /api/marketing/campaigns/{id}/target — Save segmentation rules.
-
-        PBI-7: Saves rules to campaign.
-        """
-        # TODO: Implement target saving
-        return request.make_json_response({'status': 'ok'})
-
     @http.route('/api/marketing/campaigns/<int:campaign_id>/send', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
     def send_campaign(self, campaign_id, **kwargs):
         """POST /api/marketing/campaigns/{id}/send — Broadcast via Meta Graph API.
@@ -1043,17 +1103,13 @@ class MarketingController(http.Controller):
                     '|', ('mobile', '!=', False), ('phone', '!=', False),
                 ])
             else:
-                partners = (
-                    campaign.segment_id.preview_partner_ids
-                    if campaign.segment_id and campaign.segment_id.preview_partner_ids
-                    else campaign.target_audience_ids
-                )
+                partners = campaign.target_audience_ids
 
             if not partners:
                 no_partner_msg = (
                     'Tidak ada penerima dengan nomor telepon yang valid.'
                     if scope == 'all'
-                    else 'Kampanye belum memiliki target pelanggan. Gunakan opsi Semua Pelanggan atau tambahkan segmen terlebih dahulu.'
+                    else 'Kampanye belum memiliki target pelanggan. Tambahkan kontak terlebih dahulu saat membuat kampanye.'
                 )
                 return request.make_json_response(
                     {'error': 'validation', 'message': no_partner_msg},
