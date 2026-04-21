@@ -101,6 +101,7 @@ class ScheduledMessage(models.Model):
                         # session_id=False is set EXPLICITLY so automated follow-up
                         # messages are NEVER linked to a CC session and never affect
                         # session evaluation metrics (first response time, rating, etc.).
+                        msg_src = 'followup' if msg.schedule_type == 'auto_followup' else 'promo'
                         self.env['dke.chat.message'].sudo().create({
                             'room_id': msg.chat_room_id.id,
                             'session_id': False,
@@ -110,6 +111,7 @@ class ScheduledMessage(models.Model):
                             'message_type': 'text',
                             'is_automated': True,
                             'send_status': 'sent' if wa_sent else 'failed',
+                            'message_source': msg_src,
                             'created_at': now,
                         })
                     # Update room last_message_time

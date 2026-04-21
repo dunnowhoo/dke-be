@@ -111,6 +111,7 @@ class ChatController(http.Controller):
             'is_read': msg.is_read,
             'is_automated': msg.is_automated,
             'send_status': msg.send_status,
+            'message_source': msg.message_source or 'chat',
             'created_at': ChatController._fmt_dt(msg.created_at),
         }
 
@@ -241,6 +242,7 @@ class ChatController(http.Controller):
             'is_read': ChatController._resolve_wa_is_read(mail_msg, sender_type),
             'is_automated': False,
             'send_status': ChatController._resolve_wa_send_status(mail_msg, sender_type),
+            'message_source': 'chat',
             'created_at': ChatController._fmt_dt(mail_msg.create_date),
         }
 
@@ -272,6 +274,69 @@ class ChatController(http.Controller):
     # ──────────────────────────────────────────────────────────────
     # Sync: discuss.channel (WhatsApp) → dke.chat.room
     # ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _absorb_channel_as_promo(channel, room):
+        """Copy messages from an outbound-only WhatsApp channel into an
+        existing dke.chat.room as dke.chat.message records tagged with
+        message_source='promo', skipping any already imported
+        (matched by external_message_id).
+
+        This is called when a WA template blast creates a new discuss.channel
+        for a contact whose primary chat room already exists, instead of
+        overwriting the room's discuss_channel_id we fold those messages in.
+        """
+        MailMsg = request.env['mail.message'].sudo()
+        Msg = request.env['dke.chat.message'].sudo()
+
+        channel_msgs = MailMsg.search([
+            ('model', '=', 'discuss.channel'),
+            ('res_id', '=', channel.id),
+            ('message_type', 'in', ('comment', 'whatsapp_message')),
+        ], order='create_date asc')
+
+        if not channel_msgs:
+            return
+
+        # Ids already imported (avoid duplicate inserts)
+        existing_ext_ids = {
+            m.external_message_id
+            for m in Msg.search([
+                ('room_id', '=', room.id),
+                ('external_message_id', '!=', False),
+            ])
+            if m.external_message_id
+        }
+
+        is_customer = channel.whatsapp_partner_id
+        to_create = []
+        for mail_msg in channel_msgs:
+            ext_id = 'discuss:%d' % mail_msg.id
+            if ext_id in existing_ext_ids:
+                continue
+            is_customer_msg = is_customer and mail_msg.author_id == is_customer
+            sender_type = 'customer' if is_customer_msg else 'system'
+            body = re.sub(r'<[^>]+>', '', mail_msg.body or '').strip()
+            to_create.append({
+                'room_id': room.id,
+                'session_id': False,
+                'external_message_id': ext_id,
+                'sender_type': sender_type,
+                'content_text': body,
+                'message_type': 'text',
+                'is_automated': True,
+                'is_read': True,
+                'send_status': 'sent',
+                'message_source': 'promo',
+                'created_at': mail_msg.create_date,
+            })
+
+        if to_create:
+            Msg.create(to_create)
+            _logger.info(
+                '_absorb_channel_as_promo: imported %d promo messages into room %s from channel %s',
+                len(to_create), room.id, channel.id,
+            )
 
     @staticmethod
     def _sync_whatsapp_channels():
@@ -369,6 +434,30 @@ class ChatController(http.Controller):
 
             room = Room.search(same_contact_domain, limit=1)
             if room:
+                # If the existing room already has a DIFFERENT discuss.channel linked,
+                # check whether this new channel has customer messages:
+                #   - No customer messages → outbound-only template blast (promo/followup).
+                #     Absorb messages into existing room without overwriting discuss_channel_id.
+                #   - Has customer messages → customer responded; update discuss_channel_id
+                #     so replies are routed through the active channel.
+                if room.discuss_channel_id and room.discuss_channel_id.id != ch.id:
+                    customer_msg = request.env['mail.message'].sudo().search([
+                        ('model', '=', 'discuss.channel'),
+                        ('res_id', '=', ch.id),
+                        ('message_type', 'in', ('comment', 'whatsapp_message')),
+                        ('author_id', '=', ch.whatsapp_partner_id.id if ch.whatsapp_partner_id else False),
+                    ], limit=1)
+
+                    if not customer_msg:
+                        # Outbound-only channel: absorb messages as promo records
+                        ChatController._absorb_channel_as_promo(ch, room)
+                        # Update last_message_time if this blast is more recent
+                        if last_msg and (not room.last_message_time or last_msg.create_date > room.last_message_time):
+                            room.write({'last_message_time': last_msg.create_date})
+                        new_ids.add(room.id)
+                        continue
+                    # Customer replied in this new channel → fall through to update discuss_channel_id
+
                 room.write({
                     'name': room.name or ch.name or ('WA: %s' % customer_name),
                     'customer_name': customer_name,
@@ -412,7 +501,6 @@ class ChatController(http.Controller):
           - search : string — cari customer_name / phone (optional)
         """
         try:
-            # Sync native WA discuss channels → dke.chat.room
             self._sync_whatsapp_channels()
 
             page = max(int(kwargs.get('page', 1)), 1)
@@ -459,12 +547,17 @@ class ChatController(http.Controller):
     def get_room_messages(self, room_id, **kwargs):
         """GET /api/chat/rooms/{room_id}/messages — Get full message history.
 
-        EPIC02 - PBI-20: Returns all messages, marks unread messages as read,
-                         resets unread_count on the room.
+        EPIC02 - PBI-20: Returns messages in ascending order (oldest→newest).
+        By default returns the LATEST `limit` messages so the chat opens at
+        the bottom. Use `before_id` to page backward (load older messages).
+        Use `after_id` for incremental real-time append (SSE/polling).
+
         Query Params:
-          - page     : int (default 1)
-          - limit    : int (default 50)
-          - after_id : int (optional) — return only messages with id > after_id
+          - limit     : int (default 50, max 200)
+          - after_id  : int (optional) — return only messages with id > after_id
+          - before_id : int (optional) — return only messages with id < before_id
+                        (load-more-upward; returns up to `limit` messages
+                         immediately before that id, sorted asc so FE can prepend)
         """
         try:
             room = request.env['dke.chat.room'].sudo().browse(room_id)
@@ -473,9 +566,9 @@ class ChatController(http.Controller):
                     {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
                 )
 
-            page = max(int(kwargs.get('page', 1)), 1)
             limit = min(int(kwargs.get('limit', 50)), 200)
             after_id = int(kwargs.get('after_id', 0))
+            before_id = int(kwargs.get('before_id', 0))
 
             # If the room is linked to a native discuss.channel,
             # read messages from mail.message instead of dke.chat.message.
@@ -487,13 +580,22 @@ class ChatController(http.Controller):
                     ('message_type', 'in', ('comment', 'whatsapp_message')),
                 ]
                 if after_id:
+                    # Real-time incremental: newer messages only
                     msg_domain.append(('id', '>', after_id))
-                total = MailMsg.search_count(msg_domain)
-                mail_msgs = MailMsg.search(
-                    msg_domain, limit=limit,
-                    offset=(page - 1) * limit if not after_id else 0,
-                    order='create_date asc',
-                )
+                    total = MailMsg.search_count(msg_domain)
+                    mail_msgs = MailMsg.search(msg_domain, limit=limit, order='create_date asc')
+                elif before_id:
+                    # Load-more upward: older messages before cursor
+                    msg_domain.append(('id', '<', before_id))
+                    total = MailMsg.search_count(msg_domain)
+                    # Fetch latest `limit` of the older batch, then reverse to asc
+                    mail_msgs = MailMsg.search(msg_domain, limit=limit, order='create_date desc')
+                    mail_msgs = mail_msgs[::-1]
+                else:
+                    # Initial load: latest `limit` messages, returned asc
+                    total = MailMsg.search_count(msg_domain)
+                    mail_msgs = MailMsg.search(msg_domain, limit=limit, order='create_date desc')
+                    mail_msgs = mail_msgs[::-1]
                 data = [
                     self._discuss_msg_to_dict(m, room.discuss_channel_id)
                     for m in mail_msgs
@@ -502,12 +604,21 @@ class ChatController(http.Controller):
                 Msg = request.env['dke.chat.message'].sudo()
                 domain = [('room_id', '=', room_id)]
                 if after_id:
+                    # Real-time incremental
                     domain.append(('id', '>', after_id))
-                total = Msg.search_count(domain)
-                messages = Msg.search(
-                    domain, limit=limit,
-                    offset=(page - 1) * limit if not after_id else 0,
-                )
+                    total = Msg.search_count(domain)
+                    messages = Msg.search(domain, limit=limit, order='created_at asc')
+                elif before_id:
+                    # Load-more upward
+                    domain.append(('id', '<', before_id))
+                    total = Msg.search_count(domain)
+                    messages = Msg.search(domain, limit=limit, order='created_at desc')
+                    messages = messages[::-1]
+                else:
+                    # Initial load: latest messages
+                    total = Msg.search_count(domain)
+                    messages = Msg.search(domain, limit=limit, order='created_at desc')
+                    messages = messages[::-1]
 
                 # Mark unread customer messages as read
                 unread = messages.filtered(lambda m: not m.is_read and m.sender_type == 'customer')
@@ -517,14 +628,30 @@ class ChatController(http.Controller):
 
                 data = [self._message_to_dict(m) for m in messages]
 
+            has_more_above = False
+            if data and not after_id:
+                # There are older messages if first message id is not the oldest
+                first_id = data[0]['id'] if data else 0
+                if room.discuss_channel_id:
+                    has_more_above = bool(request.env['mail.message'].sudo().search_count([
+                        ('model', '=', 'discuss.channel'),
+                        ('res_id', '=', room.discuss_channel_id.id),
+                        ('message_type', 'in', ('comment', 'whatsapp_message')),
+                        ('id', '<', first_id),
+                    ])) if first_id else False
+                else:
+                    has_more_above = bool(request.env['dke.chat.message'].sudo().search_count([
+                        ('room_id', '=', room_id),
+                        ('id', '<', first_id),
+                    ])) if first_id else False
+
             return request.make_json_response({
                 'status': 'success',
                 'room': self._room_to_dict(room),
                 'meta': {
                     'total': total,
-                    'page': page,
                     'limit': limit,
-                    'pages': -(-total // limit) if total else 0,
+                    'has_more_above': has_more_above,
                 },
                 'data': data,
             })
