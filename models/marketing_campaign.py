@@ -36,7 +36,7 @@ class MarketingCampaign(models.Model):
         ('cancelled', 'Cancelled'),
     ], string='Status', default='draft')
 
-    # Target & Segmentation
+    # Target Audience
     segment_id = fields.Many2one('dke.customer.segment', string='Customer Segment')
     target_audience_ids = fields.Many2many('res.partner', string='Target Audience')
     matched_count = fields.Integer(string='Matched Customers', default=0)
