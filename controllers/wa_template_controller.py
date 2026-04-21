@@ -56,6 +56,32 @@ def _sync_template_variables(template):
         WaVar.create(to_create)
 
 
+def _set_unique_demo_values(template):
+    """Assign unique, numbered demo values to every variable so Meta API accepts the submission.
+
+    Meta WhatsApp API rejects template submissions where multiple variables share
+    an identical demo value (e.g. all "Contoh Nilai"). We assign:
+      - Body vars  → "ContohNilai1", "ContohNilai2", … (sorted by variable name)
+      - Header var → "ContohHeader"
+
+    This must be called AFTER _sync_template_variables() so all variable records exist.
+    """
+    template.invalidate_recordset()
+    body_vars = sorted(
+        [v for v in template.variable_ids if v.line_type == 'body'],
+        key=lambda v: v.name,
+    )
+    header_vars = [v for v in template.variable_ids if v.line_type == 'header']
+
+    for idx, var in enumerate(body_vars, start=1):
+        var.write({'demo_value': 'ContohNilai%d' % idx})
+    for var in header_vars:
+        var.write({'demo_value': 'ContohHeader'})
+
+    template.env.cr.flush()
+    template.invalidate_recordset()
+
+
 def _require_sales_access():
     """Return error dict if user is not Sales Staff, Sales Manager, or Admin."""
     user = request.env.user
@@ -369,6 +395,11 @@ class WaTemplateController(http.Controller):
         _sync_template_variables(template)
         template.invalidate_recordset()  # clear cache again after _sync writes
 
+        # Meta WhatsApp API requires each variable to have a UNIQUE, non-generic
+        # demo value. All variables with the same value (e.g. "Contoh Nilai")
+        # cause Meta to reject the submission as "query was malformed".
+        _set_unique_demo_values(template)
+
         try:
             template.button_submit_template()
         except Exception as e:
@@ -487,11 +518,36 @@ class WaTemplateController(http.Controller):
             'email': p.email or '',
         } for p in partners] + orphan_data
 
-        total += len(orphan_data)
+        # Deduplicate by normalised phone number to prevent the same physical person
+        # appearing twice (e.g. one res.partner created manually with formatted phone
+        # "+62 812-5581-2675" and another created from WhatsApp with "+6281255812675").
+        # Normalisation: keep digits only, strip leading country code 62 → use last 9 digits
+        # as the dedup key so "08123456789" == "+628123456789" == "628123456789".
+        def _phone_key(mobile: str) -> str:
+            digits = ''.join(c for c in (mobile or '') if c.isdigit())
+            return digits[-9:] if len(digits) >= 9 else digits
+
+        seen_phones: set = set()
+        seen_ids: set = set()
+        deduped = []
+        for entry in data:
+            eid = entry['id']
+            key = _phone_key(entry.get('mobile', ''))
+            # Always keep entry if no phone (id-only dedup); skip if phone already seen
+            if eid in seen_ids:
+                continue
+            if key and key in seen_phones:
+                continue
+            seen_ids.add(eid)
+            if key:
+                seen_phones.add(key)
+            deduped.append(entry)
+
+        total = len(deduped)
 
         return {
             'status': 'success',
-            'data': data,
+            'data': deduped,
             'pagination': {
                 'page': page,
                 'limit': limit,
@@ -572,90 +628,85 @@ class WaTemplateController(http.Controller):
         errors = []
 
         for partner in valid_partners:
+            # Isolate each partner in a savepoint so a failure for one contact
+            # never rolls back the ORM writes for contacts already processed.
             try:
-                # Search for existing room: first by customer_id (res.partner link),
-                # then by external_conversation_id (phone number) as fallback so we
-                # never create a duplicate room for a customer who already has one.
-                room = ChatRoom.search([('customer_id', '=', partner.id)], limit=1)
-                if not room:
-                    phone_raw = (partner.mobile or partner.phone or '').strip()
-                    if phone_raw:
-                        phone_int = phone_raw
-                        if phone_int.startswith('0'):
-                            phone_int = '+62' + phone_int[1:]
-                        elif phone_int.isdigit() and len(phone_int) >= 10:
-                            phone_int = '+' + phone_int
-                        # Try exact international format first, then suffix match
-                        room = ChatRoom.search(
-                            [('external_conversation_id', '=', phone_int)], limit=1
-                        )
-                        if not room and len(phone_raw) >= 8:
+                with request.env.cr.savepoint():
+                    # Search for existing room: first by customer_id (res.partner link),
+                    # then by external_conversation_id (phone number) as fallback so we
+                    # never create a duplicate room for a customer who already has one.
+                    room = ChatRoom.search([('customer_id', '=', partner.id)], limit=1)
+                    if not room:
+                        phone_raw = (partner.mobile or partner.phone or '').strip()
+                        if phone_raw:
+                            # Normalize: strip all non-digit chars then apply country code.
+                            # Handles formats like '+62 812-5581-2675', '08123456789', etc.
+                            had_plus = phone_raw.startswith('+')
+                            phone_digits = ''.join(c for c in phone_raw if c.isdigit())
+                            if phone_digits.startswith('0'):
+                                phone_int = '+62' + phone_digits[1:]
+                            elif had_plus or phone_digits.startswith('62'):
+                                phone_int = '+' + phone_digits
+                            else:
+                                phone_int = '+62' + phone_digits
+                            # Try exact international format first, then suffix match
                             room = ChatRoom.search(
-                                [('external_conversation_id', 'like', phone_raw[-8:])],
-                                limit=1,
+                                [('external_conversation_id', '=', phone_int)], limit=1
                             )
-                if not room:
-                    room = ChatRoom.create({
-                        'name': 'Chat - %s' % partner.name,
-                        'customer_id': partner.id,
-                        'state': 'active',
-                    })
-
-                now = fields.Datetime.now()
-                msg_vals = {
-                    'chat_room_id': room.id,
-                    'customer_id': partner.id,
-                    'created_by_id': request.env.uid,
-                    'message': wa_body,
-                    'schedule_type': 'manual',
-                    'wa_template_id': template.id,
-                    'variable_values': json.dumps(variable_values) if variable_values else '',
-                }
-
-                if send_at:
-                    msg_vals['send_at'] = send_at
-                    msg_vals['state'] = 'pending'
-                    ScheduledMsg.create(msg_vals)
-                    scheduled_count += 1
-                else:
-                    # Immediate send: try WA API first, then record in chat
-                    msg_vals['send_at'] = now
-                    sched_rec = ScheduledMsg.create(msg_vals)
-
-                    # Call WA API via the scheduled message model
-                    wa_sent = sched_rec._send_via_whatsapp_template(sched_rec, room)
-
-                    if wa_sent:
-                        sched_rec.write({'state': 'sent', 'sent_at': now})
-                    else:
-                        # WA API not configured or failed — still record
-                        # in chat history so staff sees it, but mark as failed
-                        sched_rec.write({
-                            'state': 'failed',
-                            'sent_at': now,
-                            'error_message': 'WA API not available — message recorded in chat only',
+                            if not room and len(phone_digits) >= 8:
+                                room = ChatRoom.search(
+                                    [('external_conversation_id', 'like', phone_digits[-8:])],
+                                    limit=1,
+                                )
+                    if not room:
+                        room = ChatRoom.create({
+                            'name': 'Chat - %s' % partner.name,
+                            'customer_id': partner.id,
+                            'state': 'active',
                         })
-                        _logger.warning(
-                            'WA API send failed for partner %s, message recorded in chat only',
-                            partner.id,
-                        )
 
-                    # Post message to chat history
-                    if room.discuss_channel_id:
-                        # Room linked to native WhatsApp discuss.channel
-                        from markupsafe import Markup
-                        channel = room.discuss_channel_id.sudo()
-                        channel.message_post(
-                            body=Markup('<p>%s</p>') % wa_body,
-                            message_type='whatsapp_message',
-                            subtype_xmlid='mail.mt_comment',
-                            author_id=request.env.user.partner_id.id,
-                        )
+                    now = fields.Datetime.now()
+                    msg_vals = {
+                        'chat_room_id': room.id,
+                        'customer_id': partner.id,
+                        'created_by_id': request.env.uid,
+                        'message': wa_body,
+                        'schedule_type': 'manual',
+                        'wa_template_id': template.id,
+                        'variable_values': json.dumps(variable_values) if variable_values else '',
+                    }
+
+                    if send_at:
+                        msg_vals['send_at'] = send_at
+                        msg_vals['state'] = 'pending'
+                        ScheduledMsg.create(msg_vals)
+                        scheduled_count += 1
                     else:
-                        # Fallback: legacy dke.chat.message.
-                        # session_id=False is set EXPLICITLY so follow-up messages
-                        # are NEVER linked to a CC session and never affect evaluation
-                        # metrics (first response time, session rating, etc.).
+                        # Immediate send.
+                        # CRITICAL: set state='sent' BEFORE calling the WA API so
+                        # the cron (which picks up state='pending') can NEVER
+                        # double-send this record even if the API call is slow.
+                        msg_vals['send_at'] = now
+                        msg_vals['state'] = 'sent'
+                        msg_vals['sent_at'] = now
+                        sched_rec = ScheduledMsg.create(msg_vals)
+
+                        # Call WA API
+                        wa_sent = sched_rec._send_via_whatsapp_template(sched_rec, room)
+
+                        if not wa_sent:
+                            sched_rec.write({
+                                'state': 'failed',
+                                'error_message': 'WA API tidak tersedia — pesan direkam di chat',
+                            })
+
+                        # ALWAYS create dke.chat.message (NEVER channel.message_post).
+                        # channel.message_post creates a mail.message which the frontend
+                        # cannot read — it only reads dke.chat.message. Using
+                        # channel.message_post for rooms with discuss_channel_id causes
+                        # the bubble to appear blue (CS agent) instead of yellow (auto).
+                        # session_id=False ensures this message is NEVER linked to a CC
+                        # session and never affects session evaluation metrics.
                         request.env['dke.chat.message'].sudo().create({
                             'room_id': room.id,
                             'session_id': False,
@@ -668,17 +719,19 @@ class WaTemplateController(http.Controller):
                             'created_at': now,
                         })
 
-                    # Update room last message time
-                    room.write({'last_message_time': now})
-                    if wa_sent:
-                        sent_count += 1
-                    else:
-                        errors.append({'contact_id': partner.id, 'name': partner.name, 'error': 'WA API not available'})
+                        room.write({'last_message_time': now})
+                        if wa_sent:
+                            sent_count += 1
+                        else:
+                            errors.append({
+                                'contact_id': partner.id,
+                                'name': partner.name,
+                                'error': 'WA API tidak tersedia — pesan direkam di chat',
+                            })
 
             except Exception as e:
-                _logger.error('Send template to partner %s failed: %s', partner.id, e)
+                _logger.error('Send template to partner %s failed: %s', partner.id, e, exc_info=True)
                 errors.append({'contact_id': partner.id, 'name': partner.name, 'error': str(e)})
-
         result = {
             'status': 'success',
             'sent_count': sent_count,
@@ -687,8 +740,13 @@ class WaTemplateController(http.Controller):
         }
         if send_at:
             result['message'] = '%d pesan dijadwalkan.' % scheduled_count
+        elif sent_count > 0 and len(errors) == 0:
+            result['message'] = '%d pesan berhasil dikirim.' % sent_count
+        elif sent_count > 0 and len(errors) > 0:
+            result['message'] = '%d pesan dikirim, %d gagal (direkam di chat).' % (sent_count, len(errors))
         else:
-            result['message'] = '%d pesan dikirim.' % sent_count
+            result['message'] = 'WA API tidak tersedia. %d pesan direkam di riwayat chat (tidak terkirim ke WhatsApp).' % len(errors)
         if errors:
             result['errors'] = errors
         return result
+
