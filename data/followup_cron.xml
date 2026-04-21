@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!--
+        Cron: Eksekusi Follow-Up Rules otomatis.
+        Dijalankan setiap hari pukul 03:00 UTC (10:00 WIB).
+        Mencari chat room dengan last_message_time sesuai delay_days
+        dan membuat scheduled message untuk dikirim.
+
+        EPIC05 - PBI-33
+    -->
+    <record id="ir_cron_execute_followup_rules" model="ir.cron">
+        <field name="name">Follow-Up: Eksekusi Rule Otomatis</field>
+        <field name="model_id" ref="model_dke_followup_rule"/>
+        <field name="state">code</field>
+        <field name="code">model.cron_execute_followup_rules()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">days</field>
+        <field name="nextcall" eval="'2025-01-01 03:00:00'"/>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="True"/>
+        <field name="priority">5</field>
+        <field name="user_id" ref="base.user_root"/>
+    </record>
+
+    <!--
+        Cron: Kirim scheduled messages yang sudah waktunya.
+        Dijalankan setiap 1 menit.
+        Mengecek dke.scheduled.message dengan state='pending'
+        dan send_at <= now, lalu mengirim via WhatsApp template.
+
+        EPIC05 - PBI-34
+    -->
+    <record id="ir_cron_send_scheduled_messages" model="ir.cron">
+        <field name="name">Follow-Up: Kirim Pesan Terjadwal</field>
+        <field name="model_id" ref="model_dke_scheduled_message"/>
+        <field name="state">code</field>
+        <field name="code">model.cron_send_scheduled_messages()</field>
+        <field name="interval_number">1</field>
+        <field name="interval_type">minutes</field>
+        <field name="numbercall">-1</field>
+        <field name="active" eval="True"/>
+        <field name="priority">5</field>
+        <field name="user_id" ref="base.user_root"/>
+    </record>
+</odoo>

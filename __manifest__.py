@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 {
     'name': 'DKE Smart Sales Platform',
     'version': '17.0.1.0.0',
@@ -38,7 +37,9 @@ Key Features:
         # Data
         'data/dke_crm_data.xml',
         'data/shopee_cron.xml',
+        'data/followup_cron.xml',
         'data/dke_crm_demo_users.xml',
+        'data/announcement_demo.xml',
         'data/sla_policy_data.xml',
 
         # Views

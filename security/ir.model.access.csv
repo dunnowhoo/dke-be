@@ -50,6 +50,14 @@ access_faq_article_version_manager,dke.faq.article.version.manager,model_dke_faq
 access_notification_care,dke.notification.care,model_dke_notification,group_customer_care,1,1,1,0
 access_notification_expert,dke.notification.expert,model_dke_notification,group_expert_staff,1,1,1,0
 access_notification_manager,dke.notification.manager,model_dke_notification,group_sales_manager,1,1,1,1
+access_announcement_care,dke.announcement.care,model_dke_announcement,group_customer_care,1,0,0,0
+access_announcement_expert,dke.announcement.expert,model_dke_announcement,group_expert_staff,1,0,0,0
+access_announcement_staff,dke.announcement.staff,model_dke_announcement,group_sales_staff,1,0,0,0
+access_announcement_manager,dke.announcement.manager,model_dke_announcement,group_sales_manager,1,1,1,1
+access_announcement_read_care,dke.announcement.read.care,model_dke_announcement_read,group_customer_care,1,1,1,0
+access_announcement_read_expert,dke.announcement.read.expert,model_dke_announcement_read,group_expert_staff,1,1,1,0
+access_announcement_read_staff,dke.announcement.read.staff,model_dke_announcement_read,group_sales_staff,1,1,1,0
+access_announcement_read_manager,dke.announcement.read.manager,model_dke_announcement_read,group_sales_manager,1,1,1,1
 access_ticketing_room_expert,dke.ticketing.room.expert,model_dke_ticketing_room,group_expert_staff,1,1,0,0
 access_ticketing_message_expert,dke.ticketing.message.expert,model_dke_ticketing_message,group_expert_staff,1,1,1,0
 access_assignment_history_care,dke.ticket.assignment.history.care,model_dke_ticket_assignment_history,group_customer_care,1,1,1,0
@@ -63,3 +71,7 @@ access_performance_record_expert,dke.performance.record.expert,model_dke_perform
 access_performance_record_manager,dke.performance.record.manager,model_dke_performance_record,group_sales_manager,1,1,1,1
 access_wa_template_care,dke.wa.template.care,model_dke_wa_template,group_customer_care,1,0,0,0
 access_wa_template_manager,dke.wa.template.manager,model_dke_wa_template,group_sales_manager,1,1,1,1
+access_followup_rule_staff,dke.followup.rule.staff,model_dke_followup_rule,group_sales_staff,1,1,1,1
+access_followup_rule_manager,dke.followup.rule.manager,model_dke_followup_rule,group_sales_manager,1,1,1,1
+access_followup_log_staff,dke.followup.log.staff,model_dke_followup_log,group_sales_staff,1,0,0,0
+access_followup_log_manager,dke.followup.log.manager,model_dke_followup_log,group_sales_manager,1,1,1,1
