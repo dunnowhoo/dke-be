@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from datetime import datetime
 
 from pytz import timezone, utc
@@ -14,6 +15,45 @@ _logger = logging.getLogger(__name__)
 
 def _error(code, message):
     return {'status': 'error', 'code': code, 'message': message}
+
+
+def _sync_template_variables(template):
+    """Ensure whatsapp.template.variable records exist for all {{n}} in body/header.
+
+    Odoo's button_submit_template() needs variable_ids populated to build a
+    valid WhatsApp API payload. Without these records the API call is malformed
+    and returns "query was malformed".
+    """
+    WaVar = template.env['whatsapp.template.variable'].sudo()
+    existing = set((v.name, v.line_type) for v in template.variable_ids)
+
+    to_create = []
+
+    # Body variables — {{1}}, {{2}}, …
+    for var_name in sorted(set(re.findall(r'\{\{\d+\}\}', template.body or ''))):
+        if (var_name, 'body') not in existing:
+            to_create.append({
+                'wa_template_id': template.id,
+                'name': var_name,
+                'line_type': 'body',
+                'field_type': 'free_text',
+                'demo_value': 'Contoh Nilai',
+            })
+
+    # Header text variables
+    if template.header_type == 'text':
+        for var_name in sorted(set(re.findall(r'\{\{\d+\}\}', template.header_text or ''))):
+            if (var_name, 'header') not in existing:
+                to_create.append({
+                    'wa_template_id': template.id,
+                    'name': var_name,
+                    'line_type': 'header',
+                    'field_type': 'free_text',
+                    'demo_value': 'Contoh Nilai',
+                })
+
+    if to_create:
+        WaVar.create(to_create)
 
 
 def _require_sales_access():
@@ -315,6 +355,20 @@ class WaTemplateController(http.Controller):
         if template.status not in ('draft',):
             return _error(400, 'Template hanya bisa di-submit saat berstatus draft.')
 
+        # Ensure variable_ids are populated before submitting to WhatsApp API.
+        # variable_ids is a stored computed field (precompute=True). When the template
+        # is created via sudo() ORM, the compute may not have fired yet, or its ORM
+        # cache may be stale. We:
+        #   1. Explicitly trigger the native compute so Odoo creates the records.
+        #   2. Flush pending writes (so the new records are persisted to DB).
+        #   3. Invalidate the recordset cache so button_submit_template() reads fresh data.
+        #   4. As a safety net, _sync_template_variables fills any remaining gaps.
+        template._compute_variable_ids()
+        template.env.cr.flush()          # flush ORM write queue to DB
+        template.invalidate_recordset()  # clear stale ORM cache
+        _sync_template_variables(template)
+        template.invalidate_recordset()  # clear cache again after _sync writes
+
         try:
             template.button_submit_template()
         except Exception as e:
@@ -409,15 +463,14 @@ class WaTemplateController(http.Controller):
         ])
         orphan_data = []
         for room in orphan_rooms:
-            # Try to find or create a partner for this room
             name = room.customer_name or 'Unknown'
+            # Search for existing partner — do NOT auto-create to avoid
+            # unintended side effects on a read/list endpoint.
             existing = Partner.search([('name', '=', name)], limit=1)
             if not existing:
-                existing = Partner.create({'name': name})
-                room.write({'customer_id': existing.id})
-            else:
-                room.write({'customer_id': existing.id})
-            # Check if this partner is already in the main results
+                # Skip rooms with no partner — do not create here
+                continue
+            # Silently link if found but not yet linked
             if existing.id not in [p.id for p in partners]:
                 if not search_term or search_term.lower() in name.lower():
                     orphan_data.append({
@@ -484,7 +537,9 @@ class WaTemplateController(http.Controller):
         if send_at_raw:
             try:
                 user_tz = timezone(request.env.user.tz or 'Asia/Jakarta')
-                naive_dt = datetime.strptime(str(send_at_raw), '%Y-%m-%d %H:%M:%S')
+                # Accept both 'YYYY-MM-DD HH:MM:SS' and ISO 'YYYY-MM-DDTHH:MM:SS' formats
+                raw_str = str(send_at_raw).strip().replace('T', ' ')[:19]
+                naive_dt = datetime.strptime(raw_str, '%Y-%m-%d %H:%M:%S')
                 local_dt = user_tz.localize(naive_dt)
                 send_at = local_dt.astimezone(utc).strftime('%Y-%m-%d %H:%M:%S')
             except Exception:
@@ -518,7 +573,27 @@ class WaTemplateController(http.Controller):
 
         for partner in valid_partners:
             try:
+                # Search for existing room: first by customer_id (res.partner link),
+                # then by external_conversation_id (phone number) as fallback so we
+                # never create a duplicate room for a customer who already has one.
                 room = ChatRoom.search([('customer_id', '=', partner.id)], limit=1)
+                if not room:
+                    phone_raw = (partner.mobile or partner.phone or '').strip()
+                    if phone_raw:
+                        phone_int = phone_raw
+                        if phone_int.startswith('0'):
+                            phone_int = '+62' + phone_int[1:]
+                        elif phone_int.isdigit() and len(phone_int) >= 10:
+                            phone_int = '+' + phone_int
+                        # Try exact international format first, then suffix match
+                        room = ChatRoom.search(
+                            [('external_conversation_id', '=', phone_int)], limit=1
+                        )
+                        if not room and len(phone_raw) >= 8:
+                            room = ChatRoom.search(
+                                [('external_conversation_id', 'like', phone_raw[-8:])],
+                                limit=1,
+                            )
                 if not room:
                     room = ChatRoom.create({
                         'name': 'Chat - %s' % partner.name,
@@ -577,9 +652,13 @@ class WaTemplateController(http.Controller):
                             author_id=request.env.user.partner_id.id,
                         )
                     else:
-                        # Fallback: legacy dke.chat.message
+                        # Fallback: legacy dke.chat.message.
+                        # session_id=False is set EXPLICITLY so follow-up messages
+                        # are NEVER linked to a CC session and never affect evaluation
+                        # metrics (first response time, session rating, etc.).
                         request.env['dke.chat.message'].sudo().create({
                             'room_id': room.id,
+                            'session_id': False,
                             'sender_type': 'system',
                             'sender_id': request.env.uid,
                             'content_text': wa_body,
