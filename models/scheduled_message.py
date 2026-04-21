@@ -98,8 +98,12 @@ class ScheduledMessage(models.Model):
                             author_id=author.id if author else None,
                         )
                     else:
+                        # session_id=False is set EXPLICITLY so automated follow-up
+                        # messages are NEVER linked to a CC session and never affect
+                        # session evaluation metrics (first response time, rating, etc.).
                         self.env['dke.chat.message'].sudo().create({
                             'room_id': msg.chat_room_id.id,
+                            'session_id': False,
                             'sender_type': 'system',
                             'sender_id': msg.created_by_id.id if msg.created_by_id else False,
                             'content_text': msg.message,
@@ -111,21 +115,30 @@ class ScheduledMessage(models.Model):
                     # Update room last_message_time
                     room_rec.write({'last_message_time': now})
 
+                new_state = 'sent' if wa_sent else 'failed'
+                msg.write({
+                    'state': new_state,
+                    'sent_at': now,
+                    'error_message': False if wa_sent else 'WhatsApp API send failed — no active account, phone, or template',
+                })
+
+                # Update the FollowUpLog for this message so the logs endpoint
+                # shows accurate state instead of staying 'pending' forever.
+                if msg.followup_rule_id:
+                    log = self.env['dke.followup.log'].sudo().search([
+                        ('rule_id', '=', msg.followup_rule_id.id),
+                        ('room_id', '=', (msg.chat_room_id or msg.room_id).id),
+                        ('state', '=', 'pending'),
+                    ], limit=1)
+                    if log:
+                        log.write({'state': new_state})
+
                 if wa_sent:
-                    msg.write({
-                        'state': 'sent',
-                        'sent_at': now,
-                    })
                     _logger.info(
                         'Scheduled message %d sent for room %s',
                         msg.id, room.name,
                     )
                 else:
-                    msg.write({
-                        'state': 'failed',
-                        'sent_at': now,
-                        'error_message': 'WhatsApp API send failed — no active account, phone, or template',
-                    })
                     _logger.warning(
                         'Scheduled message %d WA API failed for room %s (recorded in chat)',
                         msg.id, room.name,

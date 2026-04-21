@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
 
+import json
 import logging
 import re
+import threading
+
+import requests as _requests
 
 from odoo import models, api
 
@@ -81,6 +85,52 @@ class MailMessage(models.Model):
                         'bus notification failed for room %s on mail.message create',
                         room.id, exc_info=True,
                     )
+
+        # Call FE webhook for all rooms that received new messages
+        self._call_fe_webhook_batch(list(room_by_channel.values()), channel_msg_map)
+
+    def _call_fe_webhook_batch(self, rooms, channel_msg_map):
+        """Fire-and-forget HTTP POST to the FE webhook URL for each room.
+
+        The URL and optional secret are stored in ir.config_parameter:
+          dke.chat.webhook_url    — e.g. https://propenheimer.vercel.app/api/chat/webhook
+          dke.chat.webhook_secret — value sent as x-webhook-secret header (optional)
+        """
+        ICP = self.env['ir.config_parameter'].sudo()
+        webhook_url = ICP.get_param('dke.chat.webhook_url', '')
+        if not webhook_url:
+            return  # not configured — skip silently
+
+        webhook_secret = ICP.get_param('dke.chat.webhook_secret', '')
+        headers = {'Content-Type': 'application/json'}
+        if webhook_secret:
+            headers['x-webhook-secret'] = webhook_secret
+
+        # Build one payload per room and fire in a background thread
+        payloads = []
+        for room in rooms:
+            payloads.append({
+                'room_id': room.id,
+                'event': 'chat.new_message',
+            })
+
+        def _post():
+            for payload in payloads:
+                try:
+                    _requests.post(
+                        webhook_url,
+                        data=json.dumps(payload),
+                        headers=headers,
+                        timeout=5,
+                    )
+                except Exception:
+                    _logger.debug(
+                        'FE webhook call failed for room %s',
+                        payload.get('room_id'), exc_info=True,
+                    )
+
+        t = threading.Thread(target=_post, daemon=True)
+        t.start()
 
     @staticmethod
     def _format_msg_for_bus(mail_msg, channel, room):
