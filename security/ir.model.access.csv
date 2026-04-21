@@ -11,12 +11,6 @@ access_chat_session_care,dke.chat.session.care,model_dke_chat_session,group_cust
 access_chat_session_manager,dke.chat.session.manager,model_dke_chat_session,group_sales_manager,1,1,1,1
 access_customer_survey_care,dke.customer.survey.care,model_dke_customer_survey,group_customer_care,1,1,1,0
 access_customer_survey_manager,dke.customer.survey.manager,model_dke_customer_survey,group_sales_manager,1,1,1,1
-access_support_ticket_care,dke.support.ticket.care,model_dke_support_ticket,group_customer_care,1,1,1,0
-access_support_ticket_expert,dke.support.ticket.expert,model_dke_support_ticket,group_expert_staff,1,1,0,0
-access_support_ticket_manager,dke.support.ticket.manager,model_dke_support_ticket,group_sales_manager,1,1,1,1
-access_support_ticket_message_care,dke.support.ticket.message.care,model_dke_support_ticket_message,group_customer_care,1,1,1,0
-access_support_ticket_message_expert,dke.support.ticket.message.expert,model_dke_support_ticket_message,group_expert_staff,1,1,1,0
-access_support_ticket_message_manager,dke.support.ticket.message.manager,model_dke_support_ticket_message,group_sales_manager,1,1,1,1
 access_ticketing_session_care,dke.ticketing.session.care,model_dke_ticketing_session,group_customer_care,1,1,1,0
 access_ticketing_session_manager,dke.ticketing.session.manager,model_dke_ticketing_session,group_sales_manager,1,1,1,1
 access_marketplace_integration_manager,dke.marketplace.integration.manager,model_dke_marketplace_integration,group_sales_manager,1,1,1,1
