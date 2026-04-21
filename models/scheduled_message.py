@@ -108,38 +108,31 @@ class ScheduledMessage(models.Model):
                 # Try to send via WhatsApp template
                 wa_sent = self._send_via_whatsapp_template(msg, room)
 
-                # Create chat message in history
+                # Create chat message in history.
+                # ALWAYS use dke.chat.message — NEVER channel.message_post.
+                # channel.message_post creates a mail.message which the frontend
+                # cannot read (it only reads dke.chat.message). Using it for rooms
+                # with discuss_channel_id causes the bubble to appear blue (CS agent)
+                # instead of yellow "AUTO FOLLOW-UP".
+                # session_id=False ensures this is NEVER linked to a CC session.
                 if msg.chat_room_id:
                     room_rec = msg.chat_room_id
-                    if room_rec.discuss_channel_id:
-                        # Room linked to native WhatsApp discuss.channel
-                        from markupsafe import Markup
-                        channel = room_rec.discuss_channel_id.sudo()
-                        author = msg.created_by_id.partner_id if msg.created_by_id else None
-                        channel.message_post(
-                            body=Markup('<p>%s</p>') % (msg.message or ''),
-                            message_type='whatsapp_message',
-                            subtype_xmlid='mail.mt_comment',
-                            author_id=author.id if author else None,
-                        )
-                    else:
-                        # session_id=False is set EXPLICITLY so automated follow-up
-                        # messages are NEVER linked to a CC session and never affect
-                        # session evaluation metrics (first response time, rating, etc.).
-                        msg_src = 'followup' if msg.schedule_type == 'auto_followup' else 'promo'
-                        self.env['dke.chat.message'].sudo().create({
-                            'room_id': msg.chat_room_id.id,
-                            'session_id': False,
-                            'sender_type': 'system',
-                            'sender_id': msg.created_by_id.id if msg.created_by_id else False,
-                            'content_text': msg.message,
-                            'message_type': 'text',
-                            'is_automated': True,
-                            'send_status': 'sent' if wa_sent else 'failed',
-                            'message_source': msg_src,
-                            'created_at': now,
-                        })
-                    # Update room last_message_time
+                    # All automated/scheduled messages use 'followup' source so
+                    # they render as amber "AUTO FOLLOW-UP" on the frontend.
+                    # 'promo' (green) is reserved for marketing campaign blasts
+                    # which go through a separate flow.
+                    self.env['dke.chat.message'].sudo().create({
+                        'room_id': room_rec.id,
+                        'session_id': False,
+                        'sender_type': 'system',
+                        'sender_id': msg.created_by_id.id if msg.created_by_id else False,
+                        'content_text': msg.message,
+                        'message_type': 'text',
+                        'is_automated': True,
+                        'send_status': 'sent' if wa_sent else 'failed',
+                        'message_source': 'followup',
+                        'created_at': now,
+                    })
                     room_rec.write({'last_message_time': now})
 
                 new_state = 'sent' if wa_sent else 'failed'
@@ -212,11 +205,19 @@ class ScheduledMessage(models.Model):
 
             # Normalize to international format (+countrycode) so Odoo's
             # mobile_number_formatted computed field can parse it reliably.
-            phone = phone.strip()
-            if phone.startswith('0'):
-                phone = '+62' + phone[1:]  # Indonesian local → international
-            elif phone.isdigit() and len(phone) >= 10:
-                phone = '+' + phone  # Bare digits → prepend +
+            # Strip spaces, dashes, dots, parentheses — res.partner stores phone
+            # in many human-readable formats like '+62 812-5581-2675'.
+            had_plus = phone.strip().startswith('+')
+            phone_digits = ''.join(c for c in phone if c.isdigit())
+            if not phone_digits:
+                _logger.warning('No phone number for room %s after normalization', room.name)
+                return False
+            if phone_digits.startswith('0'):
+                phone = '+62' + phone_digits[1:]   # 08xxx → +628xxx
+            elif had_plus or phone_digits.startswith('62'):
+                phone = '+' + phone_digits          # +62xxx or 62xxx → +62xxx
+            else:
+                phone = '+62' + phone_digits        # bare 8xxx → +628xxx
 
             # --- 3. Resolve WhatsApp template ---
             wa_template = None
