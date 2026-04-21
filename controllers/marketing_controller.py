@@ -4,14 +4,136 @@ import base64
 import json
 import logging
 import re
+import threading
 
 import requests as _requests
 
-from odoo import http, Command
+from odoo import http, Command, registry as odoo_registry, api as odoo_api
 from odoo.http import request
 from odoo.addons.phone_validation.tools import phone_validation
 
 _logger = logging.getLogger(__name__)
+
+
+def _marketing_broadcast_worker(dbname, uid, campaign_id, partner_ids, template_id, wa_account_id, test_mode):
+    """Background thread: sends WA messages for a marketing campaign.
+
+    Runs in its own DB cursor so the HTTP request can return immediately.
+    Updates campaign.state to 'done' (or 'cancelled' on fatal error) when finished.
+    """
+    try:
+        with odoo_registry(dbname).cursor() as cr:
+            env = odoo_api.Environment(cr, uid, {})
+            template = env['whatsapp.template'].sudo().browse(template_id)
+            campaign = env['dke.marketing.campaign'].sudo().browse(campaign_id)
+            sent = 0
+            failed = 0
+
+            if test_mode:
+                author_id = env.user.partner_id.id
+                for pid in partner_ids:
+                    try:
+                        env['mail.message'].sudo().create({
+                            'model': 'res.partner',
+                            'res_id': pid,
+                            'message_type': 'comment',
+                            'subtype_id': env.ref('mail.mt_note').id,
+                            'body': (
+                                '<p><strong>[TEST MODE] Kampanye: %s</strong></p>'
+                                '<p>Template: %s (%s)</p>'
+                                '<p>%s</p>'
+                            ) % (
+                                campaign.name,
+                                template.name,
+                                template.template_name,
+                                template.body or '',
+                            ),
+                            'author_id': author_id,
+                        })
+                        sent += 1
+                    except Exception as e:
+                        failed += 1
+                        _logger.warning('[Marketing TEST] note fail for partner %s: %s', pid, e)
+            else:
+                wa_account = env['whatsapp.account'].sudo().browse(wa_account_id)
+                company_country = env.company.country_id
+                WaMsg = env['whatsapp.message'].sudo()
+                has_free_text = 'free_text_json' in WaMsg._fields
+
+                for pid in partner_ids:
+                    partner = env['res.partner'].sudo().browse(pid)
+                    raw_phone = (partner.mobile or partner.phone or '').strip()
+                    if not raw_phone:
+                        failed += 1
+                        continue
+
+                    if raw_phone.startswith('0'):
+                        phone = '+62' + raw_phone[1:]
+                    elif raw_phone.isdigit() and len(raw_phone) >= 10:
+                        phone = '+' + raw_phone
+                    else:
+                        try:
+                            phone = phone_validation.phone_format(
+                                raw_phone,
+                                company_country.code,
+                                company_country.phone_code,
+                            )
+                        except Exception:
+                            phone = None
+
+                    if not phone:
+                        failed += 1
+                        continue
+
+                    try:
+                        mail_msg = env['mail.message'].sudo().create({
+                            'model': 'res.partner',
+                            'res_id': pid,
+                            'body': template.body or '',
+                            'message_type': 'whatsapp_message',
+                            'subtype_id': env.ref('mail.mt_note').id,
+                            'partner_ids': [Command.link(pid)],
+                        })
+                        wa_vals = {
+                            'mail_message_id': mail_msg.id,
+                            'mobile_number': phone,
+                            'wa_template_id': template.id,
+                            'wa_account_id': wa_account.id,
+                        }
+                        if has_free_text:
+                            wa_vals['free_text_json'] = {}
+                        wa_msg = WaMsg.create(wa_vals)
+                        wa_msg._send()
+                        wa_msg.invalidate_recordset(['state', 'failure_reason'])
+                        if wa_msg.state == 'error':
+                            failed += 1
+                            _logger.warning(
+                                '[Marketing] WA error for partner %s: %s',
+                                pid, wa_msg.failure_reason or 'unknown',
+                            )
+                        else:
+                            sent += 1
+                    except Exception as e:
+                        failed += 1
+                        _logger.warning('[Marketing] send fail for partner %s: %s', pid, e)
+
+            campaign.write({
+                'state': 'done',
+                'sent_count': sent,
+                'failed_count': failed,
+                'matched_count': len(partner_ids),
+            })
+            cr.commit()
+            _logger.info('[Marketing] campaign %s done: sent=%d failed=%d', campaign_id, sent, failed)
+    except Exception:
+        _logger.exception('[Marketing] broadcast worker fatal error for campaign %s', campaign_id)
+        try:
+            with odoo_registry(dbname).cursor() as cr2:
+                env2 = odoo_api.Environment(cr2, uid, {})
+                env2['dke.marketing.campaign'].sudo().browse(campaign_id).write({'state': 'cancelled'})
+                cr2.commit()
+        except Exception:
+            pass
 
 _ALLOWED_IMAGE_MIMETYPES = {'image/jpeg', 'image/png'}
 _MAX_IMAGE_BYTES = 2 * 1024 * 1024  # 2 MB
@@ -201,24 +323,27 @@ class MarketingController(http.Controller):
                     wa_template.id, meta_name,
                 )
 
-                # Auto-submit to Meta if account is fully configured
+                # Auto-submit to Meta
                 wa_submit_warning = None
-                if wa_account and wa_account.token and wa_account.phone_uid:
-                    try:
-                        wa_template.button_submit()
-                        _logger.info(
-                            '[Marketing] Submitted whatsapp.template id=%d to Meta',
-                            wa_template.id,
-                        )
-                    except Exception as submit_exc:
-                        _logger.warning(
-                            '[Marketing] Auto-submit failed for template id=%d: %s',
-                            wa_template.id, submit_exc,
-                        )
-                        wa_submit_warning = (
-                            'Template WhatsApp berhasil dibuat, tetapi gagal dikirim ke Meta '
-                            'untuk review: {}. Silakan submit manual melalui Odoo.'.format(submit_exc)
-                        )
+                try:
+                    wa_template._compute_variable_ids()
+                    wa_template.env.cr.flush()
+                    wa_template.invalidate_recordset()
+                    wa_template.button_submit_template()
+                    wa_template.invalidate_recordset()
+                    _logger.info(
+                        '[Marketing] Submitted whatsapp.template id=%d to Meta',
+                        wa_template.id,
+                    )
+                except Exception as submit_exc:
+                    _logger.warning(
+                        '[Marketing] Auto-submit failed for template id=%d: %s',
+                        wa_template.id, submit_exc,
+                    )
+                    wa_submit_warning = (
+                        'Template WhatsApp berhasil dibuat, tetapi gagal dikirim ke Meta '
+                        'untuk review: {}. Silakan submit manual melalui Odoo.'.format(submit_exc)
+                    )
 
             # ── Create campaign record ────────────────────────────────────
             vals = {
@@ -237,6 +362,8 @@ class MarketingController(http.Controller):
                 vals['image_url'] = image_url
             if wa_template:
                 vals['wa_template_id'] = wa_template.id
+            if wa_template:
+                vals['wa_template_id'] = wa_template.id
 
             campaign = request.env['dke.marketing.campaign'].sudo().create(vals)
 
@@ -244,6 +371,11 @@ class MarketingController(http.Controller):
             if attachment:
                 attachment.sudo().write({'res_id': campaign.id})
 
+            response_data = {'campaign_id': campaign.id, 'image_url': image_url}
+            if wa_submit_warning:
+                response_data['warning'] = wa_submit_warning
+
+            return request.make_json_response(response_data, status=201)
             response_data = {'campaign_id': campaign.id, 'image_url': image_url}
             if wa_submit_warning:
                 response_data['warning'] = wa_submit_warning
@@ -334,6 +466,7 @@ class MarketingController(http.Controller):
                     'create_date': c.create_date.isoformat() if c.create_date else None,
                     'wa_template_id': c.wa_template_id.id if c.wa_template_id else None,
                     'wa_template_name': c.wa_template_id.name if c.wa_template_id else None,
+                    'wa_template_status': c.wa_template_id.status if c.wa_template_id else None,
                     'wa_template_status': c.wa_template_id.status if c.wa_template_id else None,
                 })
 
@@ -724,14 +857,45 @@ class MarketingController(http.Controller):
 
             c = campaign
 
-            # Auto-sync template status via Odoo if still pending/draft
+            # Auto-sync template status via direct Meta API if still pending/draft
             if c.wa_template_id and c.wa_template_id.status not in ('approved', 'rejected'):
                 try:
-                    c.wa_template_id.button_sync_template()
-                    _logger.info(
-                        '[Marketing] Auto-synced template id=%d status=%s',
-                        c.wa_template_id.id, c.wa_template_id.status,
+                    wa_account = request.env['whatsapp.account'].sudo().search(
+                        [('active', '=', True)], limit=1,
                     )
+                    if wa_account and wa_account.token and wa_account.account_uid:
+                        meta_url = 'https://graph.facebook.com/v21.0/%s/message_templates' % wa_account.account_uid
+                        resp = _requests.get(
+                            meta_url,
+                            headers={'Authorization': 'Bearer %s' % wa_account.token},
+                            params={
+                                'name': c.wa_template_id.template_name,
+                                'fields': 'name,status,rejected_reason',
+                            },
+                            timeout=10,
+                        )
+                        if resp.status_code == 200:
+                            STATUS_MAP = {
+                                'APPROVED': 'approved',
+                                'REJECTED': 'rejected',
+                                'PENDING': 'pending',
+                                'SUBMITTED': 'pending',
+                            }
+                            matched = next(
+                                (t for t in resp.json().get('data', [])
+                                 if t.get('name') == c.wa_template_id.template_name),
+                                None,
+                            )
+                            if matched:
+                                new_status = STATUS_MAP.get(matched.get('status', '').upper(), c.wa_template_id.status)
+                                c.wa_template_id.write({
+                                    'status': new_status,
+                                    'error_msg': matched.get('rejected_reason') or None,
+                                })
+                                _logger.info(
+                                    '[Marketing] Auto-synced template id=%d status=%s',
+                                    c.wa_template_id.id, new_status,
+                                )
                 except Exception as sync_exc:
                     _logger.warning('[Marketing] Auto-sync template status failed: %s', sync_exc)
 
@@ -754,6 +918,7 @@ class MarketingController(http.Controller):
                 'create_date': c.create_date.isoformat() if c.create_date else None,
                 'wa_template_id': c.wa_template_id.id if c.wa_template_id else None,
                 'wa_template_name': c.wa_template_id.name if c.wa_template_id else None,
+                'wa_template_status': c.wa_template_id.status if c.wa_template_id else None,
                 'wa_template_status': c.wa_template_id.status if c.wa_template_id else None,
             })
 
@@ -816,6 +981,12 @@ class MarketingController(http.Controller):
                 return request.make_json_response(
                     {'error': 'not_found', 'message': 'Kampanye tidak ditemukan.'},
                     status=404,
+                )
+
+            if campaign.state == 'processing':
+                return request.make_json_response(
+                    {'error': 'validation', 'message': 'Kampanye sedang dalam proses pengiriman.'},
+                    status=400,
                 )
 
             if campaign.state not in ('draft', 'targeted'):
@@ -889,111 +1060,32 @@ class MarketingController(http.Controller):
                     status=400,
                 )
 
-            company_country = request.env.company.country_id
-            sent = 0
-            failed = 0
+            partner_ids = partners.ids
+            dbname = request.env.cr.dbname
+            uid = request.env.uid
 
-            if test_mode:
-                _logger.info(
-                    '[Marketing TEST MODE] Campaign %s — would send to %d partners via template "%s"',
-                    campaign_id, len(partners), template.template_name,
-                )
-                for partner in partners:
-                    try:
-                        request.env['mail.message'].sudo().create({
-                            'model': 'res.partner',
-                            'res_id': partner.id,
-                            'message_type': 'comment',
-                            'subtype_id': request.env.ref('mail.mt_note').id,
-                            'body': (
-                                '<p><strong>[TEST MODE] Kampanye: %s</strong></p>'
-                                '<p>Template: %s (%s)</p>'
-                                '<p>%s</p>'
-                            ) % (
-                                campaign.name,
-                                template.name,
-                                template.template_name,
-                                template.body or '',
-                            ),
-                            'author_id': request.env.user.partner_id.id,
-                        })
-                        sent += 1
-                    except Exception as note_exc:
-                        failed += 1
-                        _logger.warning('[Marketing TEST MODE] Could not create note for partner %s: %s', partner.id, note_exc)
-            else:
-                for partner in partners:
-                    raw_phone = (partner.mobile or partner.phone or '').strip()
-                    if not raw_phone:
-                        failed += 1
-                        continue
-
-                    if raw_phone.startswith('0'):
-                        phone = '+62' + raw_phone[1:]
-                    elif raw_phone.isdigit() and len(raw_phone) >= 10:
-                        phone = '+' + raw_phone
-                    else:
-                        try:
-                            phone = phone_validation.phone_format(
-                                raw_phone,
-                                company_country.code,
-                                company_country.phone_code,
-                            )
-                        except Exception:
-                            phone = None
-
-                    if not phone:
-                        failed += 1
-                        continue
-
-                    try:
-                        mail_msg = request.env['mail.message'].sudo().create({
-                            'model': 'res.partner',
-                            'res_id': partner.id,
-                            'body': template.body or '',
-                            'message_type': 'whatsapp_message',
-                            'subtype_id': request.env.ref('mail.mt_note').id,
-                            'partner_ids': [Command.link(partner.id)],
-                        })
-                        wa_vals = {
-                            'mail_message_id': mail_msg.id,
-                            'mobile_number': phone,
-                            'wa_template_id': template.id,
-                            'wa_account_id': wa_account.id,
-                        }
-                        WaMsg = request.env['whatsapp.message'].sudo()
-                        if 'free_text_json' in WaMsg._fields:
-                            wa_vals['free_text_json'] = {}
-                        wa_msg = WaMsg.create(wa_vals)
-                        wa_msg._send()
-                        wa_msg.invalidate_recordset(['state', 'failure_reason'])
-                        if wa_msg.state == 'error':
-                            failed += 1
-                            _logger.warning(
-                                '[Marketing] WA message error for partner %s: %s',
-                                partner.id, wa_msg.failure_reason or 'unknown',
-                            )
-                        else:
-                            sent += 1
-                    except Exception as partner_exc:
-                        failed += 1
-                        _logger.warning('[Marketing] Failed to send to partner %s: %s', partner.id, partner_exc)
-
-                if sent == 0 and failed > 0:
-                    return request.make_json_response(
-                        {'error': 'validation', 'message': 'Semua pesan gagal dikirim. Periksa nomor telepon dan konfigurasi WhatsApp.'},
-                        status=400,
-                    )
-
+            # Mark as processing and commit so the background thread sees the state.
             campaign.write({
                 'wa_template_id': template.id,
-                'state': 'done',
-                'sent_count': sent,
-                'failed_count': failed,
-                'matched_count': len(partners),
+                'state': 'processing',
+                'matched_count': len(partner_ids),
+                'sent_count': 0,
+                'failed_count': 0,
             })
+            request.env.cr.commit()
 
-            return request.make_json_response({'status': 'ok', 'queued': sent})
+            t = threading.Thread(
+                target=_marketing_broadcast_worker,
+                args=(dbname, uid, campaign_id, partner_ids, template.id,
+                      wa_account.id if wa_account else None, test_mode),
+                daemon=True,
+            )
+            t.start()
+
+            return request.make_json_response(
+                {'status': 'processing', 'queued': len(partner_ids)},
+                status=202,
+            )
 
         except Exception as exc:
             _logger.exception('[Marketing] send_campaign error: %s', exc)
