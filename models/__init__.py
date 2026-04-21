@@ -15,6 +15,7 @@ from . import marketing_campaign
 from . import wa_template
 from . import customer_segment
 from . import sale_transaction
+from . import support_ticket
 from . import helpdesk_ticket
 from . import ticket_assignment_history
 from . import ticketing_monitoring
