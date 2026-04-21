@@ -73,6 +73,12 @@ class ChatRoom(models.Model):
     scheduled_message_ids = fields.One2many(
         'dke.scheduled.message', 'room_id', string='Scheduled Messages'
     )
+    ticket_ids = fields.One2many(
+        'helpdesk.ticket',
+        'channel_id',
+        string='Support Tickets',
+        help='Linked helpdesk tickets associated with this chat room.',
+    )
 
     # Customer → CS Rating (filled by customer after chat ends or timeout)
     customer_care_rating = fields.Selection([

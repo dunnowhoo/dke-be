@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo noupdate="1">
+    <record id="announcement_demo_1" model="dke.announcement">
+        <field name="title">Perubahan SOP Penanganan Tiket</field>
+        <field name="content"><![CDATA[
+            <p>Mulai minggu ini, semua tiket dengan prioritas tinggi wajib mendapat respons pertama maksimal <strong>15 menit</strong>.</p>
+            <p>Mohon cek dashboard ticketing secara berkala agar SLA terjaga.</p>
+        ]]></field>
+        <field name="target_role">customer_care</field>
+        <field name="priority">urgent</field>
+        <field name="expiry_date">2026-12-31</field>
+        <field name="created_by" ref="base.user_admin"/>
+    </record>
+
+    <record id="announcement_demo_2" model="dke.announcement">
+        <field name="title">Format Eskalasi ke Expert Staff</field>
+        <field name="content"><![CDATA[
+            <p>Saat melakukan eskalasi, pastikan ringkasan masalah berisi:</p>
+            <ul>
+                <li>Kronologi singkat</li>
+                <li>Langkah troubleshooting yang sudah dicoba</li>
+                <li>Screenshot/attachment pendukung</li>
+            </ul>
+        ]]></field>
+        <field name="target_role">expert_staff</field>
+        <field name="priority">normal</field>
+        <field name="expiry_date">2026-12-31</field>
+        <field name="created_by" ref="base.user_admin"/>
+    </record>
+
+    <record id="announcement_demo_3" model="dke.announcement">
+        <field name="title">Jadwal Maintenance Platform Internal</field>
+        <field name="content"><![CDATA[
+            <p>Maintenance rutin akan dilakukan setiap hari Minggu pukul 00:30 - 01:30 WIB.</p>
+            <p>Pada periode tersebut, beberapa fitur mungkin mengalami keterlambatan sinkronisasi data.</p>
+        ]]></field>
+        <field name="target_role">all</field>
+        <field name="priority">normal</field>
+        <field name="expiry_date">2026-12-31</field>
+        <field name="created_by" ref="base.user_admin"/>
+    </record>
+</odoo>
