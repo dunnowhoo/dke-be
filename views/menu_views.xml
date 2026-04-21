@@ -84,7 +84,7 @@
     <menuitem id="menu_dke_support_tickets"
               name="Support Tickets"
               parent="menu_dke_support"
-              action="action_dke_support_ticket"
+              action="helpdesk.helpdesk_ticket_action_main_tree"
               sequence="10"/>
 
     <!-- ============================================================ -->
@@ -101,11 +101,11 @@
               action="action_dke_support_ticketing_monitoring"
               sequence="10"/>
 
-    <menuitem id="menu_dke_ticket_monitoring"
-              name="Ticket Performance"
+    <menuitem id="menu_dke_expert_performance"
+              name="Expert Staff Performance"
               parent="menu_dke_monitoring"
-              action="action_dke_ticket_monitoring"
-              sequence="20"/>
+              action="action_dke_expert_performance"
+              sequence="30"/>
 
     <!-- ============================================================ -->
     <!-- Configuration Menu                                            -->

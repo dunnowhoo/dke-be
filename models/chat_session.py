@@ -39,16 +39,40 @@ class ChatSession(models.Model):
         ('closed', 'Closed'),
     ], string='Status', default='active')
 
+    # Timestamps per ERD
     started_at = fields.Datetime(
         string='Started At',
         default=fields.Datetime.now,
+        help='Waktu Sesi Dimulai (Chat Masuk)',
     )
-    ended_at = fields.Datetime(string='Ended At')
+    assigned_at = fields.Datetime(
+        string='Assigned At',
+        help='Waktu CC Klik Ambil',
+    )
+    first_response_at = fields.Datetime(
+        string='First Response At',
+        help='Waktu CC Balas Pertama',
+    )
+    closed_at = fields.Datetime(
+        string='Closed At',
+        help='Waktu Sesi Ditutup',
+    )
 
-    def action_close(self):
+    close_type = fields.Selection([
+        ('manual', 'Manual'),
+        ('auto_closed', 'Auto Closed'),
+    ], string='Close Type', help='manual / auto_closed')
+
+    # Relations
+    survey_ids = fields.One2many(
+        'dke.customer.survey', 'session_id', string='Surveys',
+    )
+
+    def action_close(self, close_type='manual'):
         """Close session and set ended timestamp."""
         for rec in self:
             rec.write({
                 'state': 'closed',
-                'ended_at': fields.Datetime.now(),
+                'closed_at': fields.Datetime.now(),
+                'close_type': close_type,
             })

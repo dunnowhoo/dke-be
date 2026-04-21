@@ -70,10 +70,32 @@ class ChatRoom(models.Model):
     # Relations
     message_ids = fields.One2many('dke.chat.message', 'room_id', string='Messages')
     session_ids = fields.One2many('dke.chat.session', 'room_id', string='Sessions')
-    ticket_ids = fields.One2many('dke.support.ticket', 'room_id', string='Support Tickets')
     scheduled_message_ids = fields.One2many(
         'dke.scheduled.message', 'room_id', string='Scheduled Messages'
     )
+    ticket_ids = fields.One2many(
+        'helpdesk.ticket',
+        'channel_id',
+        string='Support Tickets',
+        help='Linked helpdesk tickets associated with this chat room.',
+    )
+
+    # Customer → CS Rating (filled by customer after chat ends or timeout)
+    customer_care_rating = fields.Selection([
+        ('1', '1 - Very Poor'),
+        ('2', '2 - Poor'),
+        ('3', '3 - Average'),
+        ('4', '4 - Good'),
+        ('5', '5 - Excellent'),
+    ], string='Customer Care Rating',
+        help='Rating given by customer for Customer Care performance.')
+    customer_care_feedback = fields.Text(
+        string='Customer Care Feedback',
+        help='Optional feedback from customer about CS performance.')
+    rating_requested_at = fields.Datetime(
+        string='Rating Requested At',
+        help='When the rating prompt was sent to the customer.')
+    is_rated = fields.Boolean(string='Is Rated', default=False)
 
     def get_active_session(self):
         """Return active chat session for this room, or empty recordset."""

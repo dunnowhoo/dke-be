@@ -126,6 +126,57 @@ class ChatController(http.Controller):
         return url
 
     @staticmethod
+    def _resolve_wa_send_status(mail_msg, sender_type):
+        """Return the real WhatsApp delivery status for a mail.message.
+
+        For outgoing CS messages linked to a WhatsApp discuss.channel,
+        Odoo tracks delivery via the ``whatsapp.message`` model.  We map
+        its state to our simpler three-value enum understood by the frontend:
+          • 'pending'  — message queued / in-flight
+          • 'sent'     — confirmed delivered / read by WhatsApp
+          • 'failed'   — delivery failed or cancelled
+
+        Customer messages are always returned as 'sent' (they originated
+        from the customer, so they trivially arrived).
+        """
+        if sender_type != 'cs':
+            return 'sent'
+        try:
+            wa_msg = mail_msg.env['whatsapp.message'].sudo().search(
+                [('mail_message_id', '=', mail_msg.id)], limit=1
+            )
+            if wa_msg:
+                state = wa_msg.state
+                if state in ('failed', 'cancel', 'error'):
+                    return 'failed'
+                if state == 'outgoing':
+                    return 'pending'
+                # 'sent', 'delivered', 'read' → sent
+                return 'sent'
+        except Exception:
+            pass  # whatsapp.message may not exist in non-Enterprise setups
+        return 'sent'
+
+    @staticmethod
+    def _resolve_wa_is_read(mail_msg, sender_type):
+        """Return True when the WA recipient has read the message.
+
+        Only meaningful for outgoing CS messages — customer messages are
+        always considered read once received.
+        """
+        if sender_type != 'cs':
+            return True
+        try:
+            wa_msg = mail_msg.env['whatsapp.message'].sudo().search(
+                [('mail_message_id', '=', mail_msg.id)], limit=1
+            )
+            if wa_msg:
+                return wa_msg.state == 'read'
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
     def _discuss_msg_to_dict(mail_msg, channel):
         """Convert a mail.message from a discuss.channel into the same
         shape as _message_to_dict so the frontend can render it uniformly."""
@@ -187,22 +238,36 @@ class ChatController(http.Controller):
             'message_type': msg_type,
             'attachment_url': att_url,
             'attachment_filename': att_filename,
-            'is_read': True,
+            'is_read': ChatController._resolve_wa_is_read(mail_msg, sender_type),
             'is_automated': False,
-            'send_status': 'sent',
+            'send_status': ChatController._resolve_wa_send_status(mail_msg, sender_type),
             'created_at': ChatController._fmt_dt(mail_msg.create_date),
         }
 
     @staticmethod
     def _ensure_active_session(room):
-        """Ensure room has exactly one active chat session available."""
+        """Ensure room has exactly one active chat session available.
+
+        When a room is 'done' (closed) and a new session is needed
+        (e.g. customer messages again), the room is re-activated and
+        unassigned so any CC can pick it up.
+        """
         session = room.get_active_session() if hasattr(room, 'get_active_session') else False
         if session:
             return session
-        return request.env['dke.chat.session'].sudo().create({
+        # Create new session — re-activate room if it was closed
+        new_session = request.env['dke.chat.session'].sudo().create({
             'room_id': room.id,
             'state': 'active',
         })
+        if room.state == 'done':
+            room.sudo().write({
+                'state': 'active',
+                'is_assigned': False,
+                'assigned_to': False,
+                'assigned_at': False,
+            })
+        return new_session
 
     # ──────────────────────────────────────────────────────────────
     # Sync: discuss.channel (WhatsApp) → dke.chat.room
@@ -490,6 +555,13 @@ class ChatController(http.Controller):
                     {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
                 )
 
+            # Block reply on closed rooms
+            if room.state == 'done':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat telah ditutup. Tidak dapat mengirim pesan.'},
+                    status=403,
+                )
+
             if request.env.user.dke_role != 'customer_care':
                 return request.make_json_response(
                     {'status': 'error', 'message': 'Hanya customer care yang dapat membalas chat.'},
@@ -509,7 +581,10 @@ class ChatController(http.Controller):
                     'assigned_to': current_uid,
                     'assigned_at': now,
                 })
-                active_session.write({'cs_user_id': current_uid})
+                active_session.write({
+                    'cs_user_id': current_uid,
+                    'assigned_at': now,
+                })
                 assigned_uid = current_uid
 
             if assigned_uid != current_uid:
@@ -546,6 +621,10 @@ class ChatController(http.Controller):
                 message_type = 'text'
 
             now = fields.Datetime.now()
+
+            # Record first response time on session
+            if active_session and not active_session.first_response_at:
+                active_session.sudo().write({'first_response_at': now})
 
             # ── Linked to native WhatsApp discuss.channel ───────
             if room.discuss_channel_id:
@@ -611,9 +690,11 @@ class ChatController(http.Controller):
 
     @http.route('/api/chat/rooms/<int:room_id>/close', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
     def close_chat(self, room_id, **kwargs):
-        """POST /api/chat/rooms/{room_id}/close — Archive/close chat.
+        """POST /api/chat/rooms/{room_id}/close — End chat session.
 
-        EPIC02 - PBI-22: Marks room state as 'done'.
+        EPIC02 - PBI-22: Closes the active session and creates a survey
+        record. Room becomes 'done' and unassigned. If the customer
+        messages again, a new session will be created automatically.
         """
         try:
             room = request.env['dke.chat.room'].sudo().browse(room_id)
@@ -637,14 +718,15 @@ class ChatController(http.Controller):
                 )
 
             active_session = self._ensure_active_session(room)
-            active_session.sudo().action_close()
+            active_session.sudo().action_close(close_type='manual')
 
-            # Start a fresh active session for the same room/contact.
-            next_session = request.env['dke.chat.session'].sudo().create({
-                'room_id': room.id,
-                'state': 'active',
+            # Create survey record (token generated automatically)
+            survey = request.env['dke.customer.survey'].sudo().create({
+                'session_id': active_session.id,
+                'partner_id': room.customer_id.id if room.customer_id else False,
             })
 
+            # Mark room as done and unassigned
             room.write({
                 'state': 'active',
                 'is_assigned': False,
@@ -654,15 +736,123 @@ class ChatController(http.Controller):
 
             return request.make_json_response({
                 'status': 'success',
-                'message': 'Session chat berhasil ditutup. Session baru telah dibuat.',
-                'session': {
-                    'id': next_session.id,
-                    'session_code': next_session.session_code,
-                },
+                'message': 'Session chat berhasil ditutup.',
                 'data': self._room_to_dict(room),
+                'session': {
+                    'id': active_session.id,
+                    'session_code': active_session.session_code,
+                    'closed_at': self._fmt_dt(active_session.closed_at),
+                    'close_type': active_session.close_type,
+                },
+                'survey': {
+                    'id': survey.id,
+                    'token': survey.token,
+                },
             })
         except Exception as e:
             _logger.error("close_chat error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    @http.route('/api/chat/rooms/<int:room_id>/survey-status', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def survey_status(self, room_id, **kwargs):
+        """GET /api/chat/rooms/{room_id}/survey-status — Check survey status for latest closed session."""
+        try:
+            room = request.env['dke.chat.room'].sudo().browse(room_id)
+            if not room.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                )
+
+            # Find the latest closed session that has a survey
+            closed_sessions = room.session_ids.filtered(lambda s: s.state == 'closed').sorted('closed_at', reverse=True)
+            if not closed_sessions:
+                return request.make_json_response({
+                    'status': 'success',
+                    'data': {'survey_status': 'no_session'},
+                })
+
+            latest_session = closed_sessions[0]
+            survey = latest_session.survey_ids[:1]
+            if not survey:
+                return request.make_json_response({
+                    'status': 'success',
+                    'data': {'survey_status': 'no_survey'},
+                })
+
+            is_submitted = bool(survey.submitted_at)
+            return request.make_json_response({
+                'status': 'success',
+                'data': {
+                    'survey_status': 'submitted' if is_submitted else 'pending',
+                    'survey_id': survey.id,
+                    'token': survey.token,
+                    'rating': survey.rating if is_submitted else None,
+                    'review_text': survey.review_text if is_submitted else None,
+                    'submitted_at': self._fmt_dt(survey.submitted_at) if is_submitted else None,
+                },
+            })
+        except Exception as e:
+            _logger.error("survey_status error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # Customer → CS Rating
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/chat/rooms/<int:room_id>/rate', type='http', auth='public', methods=['POST'], csrf=False, cors='*')
+    def rate_chat(self, room_id, **kwargs):
+        """POST /api/chat/rooms/{room_id}/rate — Submit customer rating for CS.
+
+        Body (JSON): { "rating": 1-5, "feedback": "optional text" }
+        Public auth — customer does not need Odoo login.
+        """
+        try:
+            room = request.env['dke.chat.room'].sudo().browse(room_id)
+            if not room.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                )
+
+            if room.is_rated:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat ini sudah dinilai.'}, status=400
+                )
+
+            raw = request.httprequest.data
+            body = json.loads(raw) if raw else {}
+            rating = body.get('rating')
+            feedback = (body.get('feedback') or '').strip()
+
+            if not rating or str(rating) not in ('1', '2', '3', '4', '5'):
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'rating wajib diisi (1-5).'}, status=400
+                )
+
+            room.write({
+                'customer_care_rating': str(rating),
+                'customer_care_feedback': feedback,
+                'is_rated': True,
+            })
+
+            # Recompute CS performance stats
+            if room.assigned_to:
+                room.assigned_to.sudo()._recompute_care_stats()
+
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Terima kasih atas penilaian Anda.',
+                'data': {
+                    'room_id': room.id,
+                    'rating': int(rating),
+                    'feedback': feedback,
+                },
+            })
+        except Exception as e:
+            _logger.error("rate_chat error: %s", e, exc_info=True)
             return request.make_json_response(
                 {'status': 'error', 'message': str(e)}, status=500
             )
@@ -706,12 +896,24 @@ class ChatController(http.Controller):
                     {'status': 'error', 'message': 'Format send_at tidak valid. Gunakan: YYYY-MM-DD HH:MM:SS'}, status=400
                 )
 
+            # Frontend sends local time (WIB = UTC+7). Convert to UTC for storage.
+            user_tz = request.env.user.tz or 'Asia/Jakarta'
+            import pytz
+            try:
+                local_tz = pytz.timezone(user_tz)
+                local_dt = local_tz.localize(send_at)
+                send_at_utc = local_dt.astimezone(pytz.UTC).replace(tzinfo=None)
+            except Exception:
+                send_at_utc = send_at  # fallback: treat as UTC
+
             scheduled = request.env['dke.scheduled.message'].sudo().create({
-                'room_id': room_id,
-                'message_content': message_text,
-                'send_at': send_at,
+                'chat_room_id': room_id,
+                'customer_id': room.customer_id.id if room.customer_id else False,
+                'message': message_text,
+                'send_at': send_at_utc,
                 'state': 'pending',
-                'created_by': request.env.user.id,
+                'schedule_type': 'manual',
+                'created_by_id': request.env.user.id,
             })
 
             return request.make_json_response({
@@ -720,7 +922,7 @@ class ChatController(http.Controller):
                 'data': {
                     'id': scheduled.id,
                     'room_id': room_id,
-                    'message_content': scheduled.message_content,
+                    'message': scheduled.message,
                     'send_at': self._fmt_dt(scheduled.send_at),
                     'state': scheduled.state,
                 },
@@ -732,10 +934,79 @@ class ChatController(http.Controller):
             )
 
     # ──────────────────────────────────────────────────────────────
-    # PBI-9: List available (unclaimed) chat rooms
+    # PBI-34 (EPIC05): List pending scheduled messages for a room
     # ──────────────────────────────────────────────────────────────
 
-    @http.route('/api/chats/available', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    @http.route('/api/chat/rooms/<int:room_id>/scheduled', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def list_scheduled_messages(self, room_id, **kwargs):
+        """GET /api/chat/rooms/{room_id}/scheduled — List pending scheduled messages."""
+        try:
+            room = request.env['dke.chat.room'].sudo().browse(room_id)
+            if not room.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                )
+
+            messages = request.env['dke.scheduled.message'].sudo().search([
+                ('chat_room_id', '=', room_id),
+                ('state', '=', 'pending'),
+            ], order='send_at asc')
+
+            data = []
+            for m in messages:
+                data.append({
+                    'id': m.id,
+                    'message': m.message,
+                    'send_at': self._fmt_dt(m.send_at),
+                    'state': m.state,
+                    'schedule_type': m.schedule_type,
+                    'created_by': m.created_by_id.name if m.created_by_id else None,
+                })
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': data,
+            })
+        except Exception as e:
+            _logger.error("list_scheduled_messages error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # PBI-34 (EPIC05): Cancel a scheduled message
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/chat/scheduled/<int:msg_id>/cancel', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
+    def cancel_scheduled_message(self, msg_id, **kwargs):
+        """POST /api/chat/scheduled/{msg_id}/cancel — Cancel a pending scheduled message."""
+        try:
+            msg = request.env['dke.scheduled.message'].sudo().browse(msg_id)
+            if not msg.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Pesan terjadwal tidak ditemukan.'}, status=404
+                )
+
+            if msg.state != 'pending':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya pesan berstatus pending yang bisa dibatalkan.'}, status=400
+                )
+
+            msg.write({'state': 'cancelled'})
+
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Pesan terjadwal berhasil dibatalkan.',
+            })
+        except Exception as e:
+            _logger.error("cancel_scheduled_message error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # PBI-9: List available (unclaimed) chat rooms
+    # ──────────────────────────────────────────────────────────────
     def get_available_chats(self, **kwargs):
         """GET /api/chats/available — List unassigned chat rooms.
 
@@ -963,7 +1234,10 @@ class ChatController(http.Controller):
                 'assigned_to': current_uid,
                 'assigned_at': fields.Datetime.now(),
             })
-            active_session.sudo().write({'cs_user_id': current_uid})
+            active_session.sudo().write({
+                'cs_user_id': current_uid,
+                'assigned_at': fields.Datetime.now(),
+            })
 
             return request.make_json_response({
                 'status': 'success',

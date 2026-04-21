@@ -45,5 +45,12 @@ class MarketingCampaign(models.Model):
     sent_count = fields.Integer(string='Sent Count', default=0)
     failed_count = fields.Integer(string='Failed Count', default=0)
 
+    # WhatsApp Template used for broadcast
+    wa_template_id = fields.Many2one(
+        'whatsapp.template',
+        string='WA Template Used',
+        ondelete='set null',
+    )
+
     # Created By
     created_by_id = fields.Many2one('res.users', string='Created By')

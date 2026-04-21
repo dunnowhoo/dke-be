@@ -3,7 +3,6 @@
 
     <!-- ============================================================ -->
     <!-- Dashboard Views (EPIC09)                                      -->
-    <!-- Placeholder for EIS Dashboard                                 -->
     <!-- ============================================================ -->
 
     <!-- Ticketing Monitoring Action (EPIC07) -->
@@ -13,14 +12,119 @@
         <field name="view_mode">tree,form</field>
     </record>
 
-    <!-- Ticket Monitoring Action (EPIC08) -->
-    <record id="action_dke_ticket_monitoring" model="ir.actions.act_window">
-        <field name="name">Ticket Monitoring</field>
-        <field name="res_model">dke.ticket.monitoring</field>
-        <field name="view_mode">tree,form</field>
+    <!-- ============================================================ -->
+    <!-- Expert Staff Performance Views                                -->
+    <!-- ============================================================ -->
+
+    <!-- Expert Performance Tree View -->
+    <record id="dke_expert_performance_view_tree" model="ir.ui.view">
+        <field name="name">dke.expert.performance.tree</field>
+        <field name="model">res.users</field>
+        <field name="arch" type="xml">
+            <tree string="Expert Staff Performance"
+                  default_order="total_tickets_resolved desc"
+                  decoration-success="total_tickets_resolved &gt; 0">
+                <field name="name" string="Expert Staff"/>
+                <field name="dke_specialization" string="Specialization"/>
+                <field name="dke_status" string="Status"/>
+                <field name="total_tickets_resolved" string="Tickets Resolved"/>
+                <field name="avg_resolution_time" string="Avg Resolution (hours)" widget="float" digits="[6,2]"/>
+                <field name="avg_resolution_message_count" string="Avg Messages/Ticket" widget="float" digits="[6,2]"/>
+                <field name="avg_rating" string="Avg Rating" widget="float" digits="[6,2]"/>
+                <field name="total_messages_sent" string="Messages Sent" optional="show"/>
+            </tree>
+        </field>
     </record>
 
-    <!-- TODO: Add graph/pivot views for EIS Dashboard (EPIC09 - PBI-26..29) -->
-    <!-- TODO: Add calendar views for scheduled messages -->
+    <!-- Expert Performance Form View -->
+    <record id="dke_expert_performance_view_form" model="ir.ui.view">
+        <field name="name">dke.expert.performance.form</field>
+        <field name="model">res.users</field>
+        <field name="arch" type="xml">
+            <form string="Expert Staff Performance">
+                <sheet>
+                    <div class="oe_title">
+                        <h1><field name="name" readonly="1"/></h1>
+                        <p class="o_form_uri"><field name="dke_specialization" readonly="1"/></p>
+                    </div>
+                    <group>
+                        <group string="Identity">
+                            <field name="login" readonly="1" string="Email"/>
+                            <field name="dke_role" readonly="1"/>
+                            <field name="dke_specialization" readonly="1"/>
+                            <field name="dke_status" readonly="1"/>
+                        </group>
+                        <group string="Performance Metrics">
+                            <field name="total_tickets_resolved" readonly="1"/>
+                            <field name="avg_resolution_time" readonly="1" string="Avg Resolution Time (hours)"/>
+                            <field name="avg_resolution_message_count" readonly="1" string="Avg Messages per Resolution"/>
+                            <field name="avg_rating" readonly="1"/>
+                            <field name="total_messages_sent" readonly="1"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <!-- Expert Performance Pivot View -->
+    <record id="dke_expert_performance_view_pivot" model="ir.ui.view">
+        <field name="name">dke.expert.performance.pivot</field>
+        <field name="model">res.users</field>
+        <field name="arch" type="xml">
+            <pivot string="Expert Performance">
+                <field name="dke_specialization" type="row"/>
+                <field name="total_tickets_resolved" type="measure"/>
+                <field name="avg_resolution_time" type="measure"/>
+                <field name="avg_rating" type="measure"/>
+            </pivot>
+        </field>
+    </record>
+
+    <!-- Expert Performance Search -->
+    <record id="dke_expert_performance_view_search" model="ir.ui.view">
+        <field name="name">dke.expert.performance.search</field>
+        <field name="model">res.users</field>
+        <field name="arch" type="xml">
+            <search string="Expert Performance">
+                <field name="name"/>
+                <filter name="active_experts" string="Active Experts"
+                        domain="[('dke_role', '=', 'expert_staff'), ('dke_status', '=', 'active')]"/>
+                <filter name="has_resolved" string="Has Resolved Tickets"
+                        domain="[('total_tickets_resolved', '&gt;', 0)]"/>
+                <separator/>
+                <filter name="spec_face_wash" string="Face Wash" domain="[('dke_specialization', '=', 'face_wash')]"/>
+                <filter name="spec_serum" string="Serum" domain="[('dke_specialization', '=', 'serum')]"/>
+                <filter name="spec_lotion" string="Lotion" domain="[('dke_specialization', '=', 'lotion')]"/>
+                <filter name="spec_toner" string="Toner" domain="[('dke_specialization', '=', 'toner')]"/>
+                <group string="Group By">
+                    <filter name="group_specialization" string="Specialization"
+                            context="{'group_by': 'dke_specialization'}"/>
+                    <filter name="group_status" string="Status"
+                            context="{'group_by': 'dke_status'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- Expert Performance Action (Admin / Manager) -->
+    <record id="action_dke_expert_performance" model="ir.actions.act_window">
+        <field name="name">Expert Staff Performance</field>
+        <field name="res_model">res.users</field>
+        <field name="view_mode">tree,pivot,form</field>
+        <field name="domain">[('dke_role', '=', 'expert_staff')]</field>
+        <field name="context">{'search_default_active_experts': 1}</field>
+        <field name="search_view_id" ref="dke_expert_performance_view_search"/>
+        <field name="view_ids" eval="[
+            (5, 0, 0),
+            (0, 0, {'view_mode': 'tree', 'view_id': ref('dke_expert_performance_view_tree')}),
+            (0, 0, {'view_mode': 'pivot', 'view_id': ref('dke_expert_performance_view_pivot')}),
+            (0, 0, {'view_mode': 'form', 'view_id': ref('dke_expert_performance_view_form')}),
+        ]"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">Belum ada data kinerja expert staff.</p>
+            <p>Data akan muncul setelah expert staff menyelesaikan tiket pertama mereka.</p>
+        </field>
+    </record>
 
 </odoo>

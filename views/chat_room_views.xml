@@ -54,9 +54,6 @@
                         <page string="Scheduled Messages">
                             <field name="scheduled_message_ids"/>
                         </page>
-                        <page string="Support Tickets">
-                            <field name="ticket_ids"/>
-                        </page>
                     </notebook>
                 </sheet>
             </form>

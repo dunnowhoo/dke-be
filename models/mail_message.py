@@ -129,6 +129,6 @@ class MailMessage(models.Model):
             'attachment_filename': att_filename,
             'is_read': False,
             'is_automated': False,
-            'send_status': 'sent',
+            'send_status': 'pending' if sender_type == 'cs' else 'sent',
             'created_at': created_at,
         }

@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import html
 import json
 import datetime
 import logging
