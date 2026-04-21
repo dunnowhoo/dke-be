@@ -36,6 +36,7 @@ class ScheduledMessage(models.Model):
     send_at = fields.Datetime(string='Scheduled Send Time', required=True)
     state = fields.Selection([
         ('pending', 'Pending'),
+        ('processing', 'Processing'),
         ('sent', 'Sent'),
         ('cancelled', 'Cancelled'),
         ('failed', 'Failed'),
@@ -66,12 +67,36 @@ class ScheduledMessage(models.Model):
 
         EPIC05 - PBI-34: Worker sends pending scheduled messages via
         WhatsApp template, then inserts into chat history.
+
+        Race-condition guard: we atomically claim each pending message by
+        flipping state → 'processing' via a direct UPDATE WHERE state='pending'.
+        This prevents multiple cron workers from double-sending the same message
+        when Odoo runs the cron across several parallel worker processes.
         """
         now = fields.Datetime.now()
         pending = self.search([
             ('state', '=', 'pending'),
             ('send_at', '<=', now),
         ])
+        if not pending:
+            return
+
+        # Atomically claim all found messages: only those still 'pending' will
+        # be updated (handles TOCTOU if another worker races us).
+        self.env.cr.execute(
+            """
+            UPDATE dke_scheduled_message
+               SET state = 'processing'
+             WHERE id = ANY(%s)
+               AND state = 'pending'
+            RETURNING id
+            """,
+            (list(pending.ids),),
+        )
+        claimed_ids = [row[0] for row in self.env.cr.fetchall()]
+        if not claimed_ids:
+            return  # Another worker claimed them all first
+        pending = self.browse(claimed_ids)
 
         for msg in pending:
             try:
