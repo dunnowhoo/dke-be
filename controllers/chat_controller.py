@@ -1007,6 +1007,7 @@ class ChatController(http.Controller):
     # ──────────────────────────────────────────────────────────────
     # PBI-9: List available (unclaimed) chat rooms
     # ──────────────────────────────────────────────────────────────
+    @http.route('/api/chats/available', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
     def get_available_chats(self, **kwargs):
         """GET /api/chats/available — List unassigned chat rooms.
 
