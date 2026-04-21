@@ -766,6 +766,7 @@ class ChatController(http.Controller):
             body = json.loads(raw) if raw else {}
             message_text = (body.get('message') or '').strip()
             message_type = body.get('type', 'text')
+            idempotency_key = (body.get('temp_id') or '').strip() or None
 
             if not message_text:
                 return request.make_json_response(
@@ -774,6 +775,21 @@ class ChatController(http.Controller):
 
             if message_type not in ('text', 'image', 'file'):
                 message_type = 'text'
+
+            # ── Idempotency guard ────────────────────────────────
+            # If FE sends the same temp_id twice (retry after timeout),
+            # return the already-stored message without re-sending WA.
+            if idempotency_key:
+                existing_msg = request.env['dke.chat.message'].sudo().search([
+                    ('room_id', '=', room_id),
+                    ('external_message_id', '=', 'reply:%s' % idempotency_key),
+                ], limit=1)
+                if existing_msg:
+                    msg_dict = self._message_to_dict(existing_msg)
+                    return request.make_json_response({
+                        'status': 'success',
+                        'data': msg_dict,
+                    })
 
             now = fields.Datetime.now()
 
@@ -793,6 +809,22 @@ class ChatController(http.Controller):
                 )
                 room.write({'last_message_time': now})
 
+                # Store idempotency key on a dke.chat.message stub so future
+                # duplicate requests can be detected without re-sending WA.
+                if idempotency_key:
+                    request.env['dke.chat.message'].sudo().create({
+                        'room_id': room_id,
+                        'session_id': active_session.id,
+                        'sender_type': 'cs',
+                        'sender_id': request.env.user.id,
+                        'content_text': message_text,
+                        'message_type': message_type,
+                        'is_automated': False,
+                        'send_status': 'sent',
+                        'external_message_id': 'reply:%s' % idempotency_key,
+                        'created_at': now,
+                    })
+
                 msg_dict = self._discuss_msg_to_dict(new_mail_msg, channel)
                 msg_dict['session_id'] = active_session.id
                 self._notify_new_message(room_id, msg_dict)
@@ -811,6 +843,7 @@ class ChatController(http.Controller):
                 'message_type': message_type,
                 'is_automated': False,
                 'send_status': 'sent',
+                'external_message_id': ('reply:%s' % idempotency_key) if idempotency_key else False,
                 'created_at': now,
             })
 
