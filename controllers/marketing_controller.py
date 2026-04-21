@@ -5,6 +5,8 @@ import json
 import logging
 import re
 
+import requests as _requests
+
 from odoo import http, Command
 from odoo.http import request
 from odoo.addons.phone_validation.tools import phone_validation
@@ -157,6 +159,67 @@ class MarketingController(http.Controller):
                 except (ValueError, TypeError):
                     segment_id = False
 
+            # ── WhatsApp template ─────────────────────────────────────────
+            wa_body = (kwargs.get('body') or '').strip()
+            lang_code = (kwargs.get('lang_code') or 'id').strip()
+            wa_template = None
+            wa_submit_warning = None
+
+            if wa_body:
+                meta_name = re.sub(r'[^a-z0-9]+', '_', title.lower()).strip('_') or 'campaign'
+                existing_count = request.env['whatsapp.template'].sudo().search_count(
+                    [('template_name', 'like', meta_name)]
+                )
+                if existing_count:
+                    meta_name = '%s_%s' % (meta_name, existing_count)
+
+                wa_account = request.env['whatsapp.account'].sudo().search(
+                    [('active', '=', True)], limit=1,
+                )
+                partner_model = request.env['ir.model'].sudo().search(
+                    [('model', '=', 'res.partner')], limit=1,
+                )
+
+                wa_template_vals = {
+                    'name': title,
+                    'template_name': meta_name,
+                    'body': wa_body,
+                    'lang_code': lang_code,
+                    'template_type': 'marketing',
+                    'model_id': partner_model.id,
+                    'phone_field': 'mobile',
+                    'wa_account_id': wa_account.id if wa_account else False,
+                    'status': 'draft',
+                }
+                if attachment:
+                    wa_template_vals['header_type'] = 'image'
+                    wa_template_vals['header_attachment_ids'] = [(4, attachment.id)]
+
+                wa_template = request.env['whatsapp.template'].sudo().create(wa_template_vals)
+                _logger.info(
+                    '[Marketing] Created whatsapp.template id=%d name=%s',
+                    wa_template.id, meta_name,
+                )
+
+                # Auto-submit to Meta if account is fully configured
+                wa_submit_warning = None
+                if wa_account and wa_account.token and wa_account.phone_uid:
+                    try:
+                        wa_template.button_submit()
+                        _logger.info(
+                            '[Marketing] Submitted whatsapp.template id=%d to Meta',
+                            wa_template.id,
+                        )
+                    except Exception as submit_exc:
+                        _logger.warning(
+                            '[Marketing] Auto-submit failed for template id=%d: %s',
+                            wa_template.id, submit_exc,
+                        )
+                        wa_submit_warning = (
+                            'Template WhatsApp berhasil dibuat, tetapi gagal dikirim ke Meta '
+                            'untuk review: {}. Silakan submit manual melalui Odoo.'.format(submit_exc)
+                        )
+
             # ── Create campaign record ────────────────────────────────────
             vals = {
                 'name': title,
@@ -172,6 +235,8 @@ class MarketingController(http.Controller):
                 vals['segment_id'] = segment_id
             if attachment:
                 vals['image_url'] = image_url
+            if wa_template:
+                vals['wa_template_id'] = wa_template.id
 
             campaign = request.env['dke.marketing.campaign'].sudo().create(vals)
 
@@ -179,10 +244,11 @@ class MarketingController(http.Controller):
             if attachment:
                 attachment.sudo().write({'res_id': campaign.id})
 
-            return request.make_json_response(
-                {'campaign_id': campaign.id, 'image_url': image_url},
-                status=201,
-            )
+            response_data = {'campaign_id': campaign.id, 'image_url': image_url}
+            if wa_submit_warning:
+                response_data['warning'] = wa_submit_warning
+
+            return request.make_json_response(response_data, status=201)
 
         except Exception as exc:
             _logger.exception('[Marketing] create_campaign error: %s', exc)
@@ -268,6 +334,7 @@ class MarketingController(http.Controller):
                     'create_date': c.create_date.isoformat() if c.create_date else None,
                     'wa_template_id': c.wa_template_id.id if c.wa_template_id else None,
                     'wa_template_name': c.wa_template_id.name if c.wa_template_id else None,
+                    'wa_template_status': c.wa_template_id.status if c.wa_template_id else None,
                 })
 
             return request.make_json_response({
@@ -656,6 +723,18 @@ class MarketingController(http.Controller):
                 )
 
             c = campaign
+
+            # Auto-sync template status via Odoo if still pending/draft
+            if c.wa_template_id and c.wa_template_id.status not in ('approved', 'rejected'):
+                try:
+                    c.wa_template_id.button_sync_template()
+                    _logger.info(
+                        '[Marketing] Auto-synced template id=%d status=%s',
+                        c.wa_template_id.id, c.wa_template_id.status,
+                    )
+                except Exception as sync_exc:
+                    _logger.warning('[Marketing] Auto-sync template status failed: %s', sync_exc)
+
             return request.make_json_response({
                 'id': c.id,
                 'title': c.name,
@@ -675,6 +754,7 @@ class MarketingController(http.Controller):
                 'create_date': c.create_date.isoformat() if c.create_date else None,
                 'wa_template_id': c.wa_template_id.id if c.wa_template_id else None,
                 'wa_template_name': c.wa_template_id.name if c.wa_template_id else None,
+                'wa_template_status': c.wa_template_id.status if c.wa_template_id else None,
             })
 
         except Exception as exc:
@@ -843,26 +923,28 @@ class MarketingController(http.Controller):
                         _logger.warning('[Marketing TEST MODE] Could not create note for partner %s: %s', partner.id, note_exc)
             else:
                 for partner in partners:
-                    raw_phone = partner.mobile or partner.phone
+                    raw_phone = (partner.mobile or partner.phone or '').strip()
                     if not raw_phone:
                         failed += 1
                         continue
 
-                    try:
-                        formatted = phone_validation.phone_format(
-                            raw_phone,
-                            company_country.code,
-                            company_country.phone_code,
-                        )
-                    except Exception:
-                        formatted = None
+                    if raw_phone.startswith('0'):
+                        phone = '+62' + raw_phone[1:]
+                    elif raw_phone.isdigit() and len(raw_phone) >= 10:
+                        phone = '+' + raw_phone
+                    else:
+                        try:
+                            phone = phone_validation.phone_format(
+                                raw_phone,
+                                company_country.code,
+                                company_country.phone_code,
+                            )
+                        except Exception:
+                            phone = None
 
-                    if not formatted:
+                    if not phone:
                         failed += 1
                         continue
-
-                    # Odoo whatsapp.message stores mobile_number without leading '+'
-                    phone_no_plus = formatted.lstrip('+')
 
                     try:
                         mail_msg = request.env['mail.message'].sudo().create({
@@ -873,12 +955,16 @@ class MarketingController(http.Controller):
                             'subtype_id': request.env.ref('mail.mt_note').id,
                             'partner_ids': [Command.link(partner.id)],
                         })
-                        wa_msg = request.env['whatsapp.message'].sudo().create({
+                        wa_vals = {
                             'mail_message_id': mail_msg.id,
-                            'mobile_number': phone_no_plus,
+                            'mobile_number': phone,
                             'wa_template_id': template.id,
                             'wa_account_id': wa_account.id,
-                        })
+                        }
+                        WaMsg = request.env['whatsapp.message'].sudo()
+                        if 'free_text_json' in WaMsg._fields:
+                            wa_vals['free_text_json'] = {}
+                        wa_msg = WaMsg.create(wa_vals)
                         wa_msg._send()
                         wa_msg.invalidate_recordset(['state', 'failure_reason'])
                         if wa_msg.state == 'error':
@@ -901,7 +987,7 @@ class MarketingController(http.Controller):
 
             campaign.write({
                 'wa_template_id': template.id,
-                'state': 'processing',
+                'state': 'done',
                 'sent_count': sent,
                 'failed_count': failed,
                 'matched_count': len(partners),
