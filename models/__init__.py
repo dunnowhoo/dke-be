@@ -28,3 +28,4 @@ from . import notification
 from . import announcement
 from . import sla_policy
 from . import performance_record
+from . import followup_rule

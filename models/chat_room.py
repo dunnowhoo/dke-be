@@ -90,6 +90,7 @@ class ChatRoom(models.Model):
         string='Rating Requested At',
         help='When the rating prompt was sent to the customer.')
     is_rated = fields.Boolean(string='Is Rated', default=False)
+
     def get_active_session(self):
         """Return active chat session for this room, or empty recordset."""
         self.ensure_one()

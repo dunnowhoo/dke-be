@@ -12,3 +12,5 @@ from . import announcement_controller
 from . import performance_controller
 from . import bus_controller
 from . import products_controller
+from . import followup_controller
+from . import wa_template_controller

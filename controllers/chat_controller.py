@@ -728,7 +728,7 @@ class ChatController(http.Controller):
 
             # Mark room as done and unassigned
             room.write({
-                'state': 'done',
+                'state': 'active',
                 'is_assigned': False,
                 'assigned_to': False,
                 'assigned_at': False,
@@ -896,12 +896,24 @@ class ChatController(http.Controller):
                     {'status': 'error', 'message': 'Format send_at tidak valid. Gunakan: YYYY-MM-DD HH:MM:SS'}, status=400
                 )
 
+            # Frontend sends local time (WIB = UTC+7). Convert to UTC for storage.
+            user_tz = request.env.user.tz or 'Asia/Jakarta'
+            import pytz
+            try:
+                local_tz = pytz.timezone(user_tz)
+                local_dt = local_tz.localize(send_at)
+                send_at_utc = local_dt.astimezone(pytz.UTC).replace(tzinfo=None)
+            except Exception:
+                send_at_utc = send_at  # fallback: treat as UTC
+
             scheduled = request.env['dke.scheduled.message'].sudo().create({
-                'room_id': room_id,
-                'message_content': message_text,
-                'send_at': send_at,
+                'chat_room_id': room_id,
+                'customer_id': room.customer_id.id if room.customer_id else False,
+                'message': message_text,
+                'send_at': send_at_utc,
                 'state': 'pending',
-                'created_by': request.env.user.id,
+                'schedule_type': 'manual',
+                'created_by_id': request.env.user.id,
             })
 
             return request.make_json_response({
@@ -910,7 +922,7 @@ class ChatController(http.Controller):
                 'data': {
                     'id': scheduled.id,
                     'room_id': room_id,
-                    'message_content': scheduled.message_content,
+                    'message': scheduled.message,
                     'send_at': self._fmt_dt(scheduled.send_at),
                     'state': scheduled.state,
                 },
@@ -922,10 +934,79 @@ class ChatController(http.Controller):
             )
 
     # ──────────────────────────────────────────────────────────────
-    # PBI-9: List available (unclaimed) chat rooms
+    # PBI-34 (EPIC05): List pending scheduled messages for a room
     # ──────────────────────────────────────────────────────────────
 
-    @http.route('/api/chats/available', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    @http.route('/api/chat/rooms/<int:room_id>/scheduled', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
+    def list_scheduled_messages(self, room_id, **kwargs):
+        """GET /api/chat/rooms/{room_id}/scheduled — List pending scheduled messages."""
+        try:
+            room = request.env['dke.chat.room'].sudo().browse(room_id)
+            if not room.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Chat room tidak ditemukan.'}, status=404
+                )
+
+            messages = request.env['dke.scheduled.message'].sudo().search([
+                ('chat_room_id', '=', room_id),
+                ('state', '=', 'pending'),
+            ], order='send_at asc')
+
+            data = []
+            for m in messages:
+                data.append({
+                    'id': m.id,
+                    'message': m.message,
+                    'send_at': self._fmt_dt(m.send_at),
+                    'state': m.state,
+                    'schedule_type': m.schedule_type,
+                    'created_by': m.created_by_id.name if m.created_by_id else None,
+                })
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': data,
+            })
+        except Exception as e:
+            _logger.error("list_scheduled_messages error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # PBI-34 (EPIC05): Cancel a scheduled message
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/chat/scheduled/<int:msg_id>/cancel', type='http', auth='user', methods=['POST'], csrf=False, cors='*')
+    def cancel_scheduled_message(self, msg_id, **kwargs):
+        """POST /api/chat/scheduled/{msg_id}/cancel — Cancel a pending scheduled message."""
+        try:
+            msg = request.env['dke.scheduled.message'].sudo().browse(msg_id)
+            if not msg.exists():
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Pesan terjadwal tidak ditemukan.'}, status=404
+                )
+
+            if msg.state != 'pending':
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Hanya pesan berstatus pending yang bisa dibatalkan.'}, status=400
+                )
+
+            msg.write({'state': 'cancelled'})
+
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Pesan terjadwal berhasil dibatalkan.',
+            })
+        except Exception as e:
+            _logger.error("cancel_scheduled_message error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    # ──────────────────────────────────────────────────────────────
+    # PBI-9: List available (unclaimed) chat rooms
+    # ──────────────────────────────────────────────────────────────
     def get_available_chats(self, **kwargs):
         """GET /api/chats/available — List unassigned chat rooms.
 

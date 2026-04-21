@@ -27,7 +27,7 @@ docker-compose up -d
 
 # buat database dan install module
 docker exec -t dke-odoo odoo --db_host=db --db_user=odoo --db_password=odoo \
-  -d dke_crm -i dke_crm --stop-after-init
+  -d CRM_ENTERPRISE -i dke_crm --stop-after-init
 
 # restart odoo
 docker-compose restart odoo
