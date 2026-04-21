@@ -111,6 +111,7 @@ class ChatController(http.Controller):
             'is_read': msg.is_read,
             'is_automated': msg.is_automated,
             'send_status': msg.send_status,
+            'message_source': msg.message_source or 'chat',
             'created_at': ChatController._fmt_dt(msg.created_at),
         }
 
@@ -241,6 +242,7 @@ class ChatController(http.Controller):
             'is_read': ChatController._resolve_wa_is_read(mail_msg, sender_type),
             'is_automated': False,
             'send_status': ChatController._resolve_wa_send_status(mail_msg, sender_type),
+            'message_source': 'chat',
             'created_at': ChatController._fmt_dt(mail_msg.create_date),
         }
 
@@ -272,6 +274,69 @@ class ChatController(http.Controller):
     # ──────────────────────────────────────────────────────────────
     # Sync: discuss.channel (WhatsApp) → dke.chat.room
     # ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _absorb_channel_as_promo(channel, room):
+        """Copy messages from an outbound-only WhatsApp channel into an
+        existing dke.chat.room as dke.chat.message records tagged with
+        message_source='promo', skipping any already imported
+        (matched by external_message_id).
+
+        This is called when a WA template blast creates a new discuss.channel
+        for a contact whose primary chat room already exists, instead of
+        overwriting the room's discuss_channel_id we fold those messages in.
+        """
+        MailMsg = request.env['mail.message'].sudo()
+        Msg = request.env['dke.chat.message'].sudo()
+
+        channel_msgs = MailMsg.search([
+            ('model', '=', 'discuss.channel'),
+            ('res_id', '=', channel.id),
+            ('message_type', 'in', ('comment', 'whatsapp_message')),
+        ], order='create_date asc')
+
+        if not channel_msgs:
+            return
+
+        # Ids already imported (avoid duplicate inserts)
+        existing_ext_ids = {
+            m.external_message_id
+            for m in Msg.search([
+                ('room_id', '=', room.id),
+                ('external_message_id', '!=', False),
+            ])
+            if m.external_message_id
+        }
+
+        is_customer = channel.whatsapp_partner_id
+        to_create = []
+        for mail_msg in channel_msgs:
+            ext_id = 'discuss:%d' % mail_msg.id
+            if ext_id in existing_ext_ids:
+                continue
+            is_customer_msg = is_customer and mail_msg.author_id == is_customer
+            sender_type = 'customer' if is_customer_msg else 'system'
+            body = re.sub(r'<[^>]+>', '', mail_msg.body or '').strip()
+            to_create.append({
+                'room_id': room.id,
+                'session_id': False,
+                'external_message_id': ext_id,
+                'sender_type': sender_type,
+                'content_text': body,
+                'message_type': 'text',
+                'is_automated': True,
+                'is_read': True,
+                'send_status': 'sent',
+                'message_source': 'promo',
+                'created_at': mail_msg.create_date,
+            })
+
+        if to_create:
+            Msg.create(to_create)
+            _logger.info(
+                '_absorb_channel_as_promo: imported %d promo messages into room %s from channel %s',
+                len(to_create), room.id, channel.id,
+            )
 
     @staticmethod
     def _sync_whatsapp_channels():
@@ -369,6 +434,30 @@ class ChatController(http.Controller):
 
             room = Room.search(same_contact_domain, limit=1)
             if room:
+                # If the existing room already has a DIFFERENT discuss.channel linked,
+                # check whether this new channel has customer messages:
+                #   - No customer messages → outbound-only template blast (promo/followup).
+                #     Absorb messages into existing room without overwriting discuss_channel_id.
+                #   - Has customer messages → customer responded; update discuss_channel_id
+                #     so replies are routed through the active channel.
+                if room.discuss_channel_id and room.discuss_channel_id.id != ch.id:
+                    customer_msg = request.env['mail.message'].sudo().search([
+                        ('model', '=', 'discuss.channel'),
+                        ('res_id', '=', ch.id),
+                        ('message_type', 'in', ('comment', 'whatsapp_message')),
+                        ('author_id', '=', ch.whatsapp_partner_id.id if ch.whatsapp_partner_id else False),
+                    ], limit=1)
+
+                    if not customer_msg:
+                        # Outbound-only channel: absorb messages as promo records
+                        ChatController._absorb_channel_as_promo(ch, room)
+                        # Update last_message_time if this blast is more recent
+                        if last_msg and (not room.last_message_time or last_msg.create_date > room.last_message_time):
+                            room.write({'last_message_time': last_msg.create_date})
+                        new_ids.add(room.id)
+                        continue
+                    # Customer replied in this new channel → fall through to update discuss_channel_id
+
                 room.write({
                     'name': room.name or ch.name or ('WA: %s' % customer_name),
                     'customer_name': customer_name,
@@ -399,10 +488,6 @@ class ChatController(http.Controller):
     # PBI-2: List chat rooms
     # ──────────────────────────────────────────────────────────────
 
-    # One sync per process; tracks last run timestamp to avoid hammering DB on every list call
-    _last_sync_ts: float = 0.0
-    _SYNC_THROTTLE_SECS: float = 30.0  # re-sync at most once per 30 s
-
     @http.route('/api/chat/list', type='http', auth='user', methods=['GET'], csrf=False, cors='*')
     def get_chat_list(self, **kwargs):
         """GET /api/chat/list — List all chat rooms with pagination.
@@ -416,12 +501,7 @@ class ChatController(http.Controller):
           - search : string — cari customer_name / phone (optional)
         """
         try:
-            # Throttle expensive WA sync — run at most once per 30 s per Odoo process
-            import time as _time
-            now_ts = _time.monotonic()
-            if now_ts - ChatController._last_sync_ts >= ChatController._SYNC_THROTTLE_SECS:
-                self._sync_whatsapp_channels()
-                ChatController._last_sync_ts = now_ts
+            self._sync_whatsapp_channels()
 
             page = max(int(kwargs.get('page', 1)), 1)
             limit = min(int(kwargs.get('limit', 20)), 100)

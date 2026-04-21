@@ -38,6 +38,14 @@ class ChatMessage(models.Model):
     ], string='Message Type', default='text')
     attachment_url = fields.Char(string='Attachment URL')
 
+    # Source category — used to colour-code bubbles on the frontend
+    message_source = fields.Selection([
+        ('chat', 'Chat'),
+        ('promo', 'Promotional Blast'),
+        ('followup', 'Follow-Up'),
+    ], string='Message Source', default='chat',
+        help='chat = normal conversation; promo = outbound template blast; followup = auto follow-up')
+
     # Status
     is_read = fields.Boolean(string='Read', default=False)
     is_automated = fields.Boolean(string='Automated Message', default=False)

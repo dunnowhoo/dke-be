@@ -101,3 +101,25 @@ class ChatRoom(models.Model):
         """Return active chat session for this room, or empty recordset."""
         self.ensure_one()
         return self.session_ids.filtered(lambda s: s.state == 'active')[:1]
+
+    # ── Convenience computed fields (read-only, not stored) ──────
+
+    active_session_id = fields.Many2one(
+        'dke.chat.session',
+        string='Active Session',
+        compute='_compute_active_session',
+        store=False,
+    )
+    current_agent_id = fields.Many2one(
+        'res.users',
+        string='Current Agent',
+        compute='_compute_active_session',
+        store=False,
+    )
+
+    @api.depends('session_ids.state', 'session_ids.cs_user_id')
+    def _compute_active_session(self):
+        for room in self:
+            session = room.session_ids.filtered(lambda s: s.state == 'active')[:1]
+            room.active_session_id = session
+            room.current_agent_id = session.cs_user_id if session else False
