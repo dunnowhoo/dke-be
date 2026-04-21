@@ -276,15 +276,21 @@ class ChatController(http.Controller):
     # ──────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _absorb_channel_as_promo(channel, room):
-        """Copy messages from an outbound-only WhatsApp channel into an
-        existing dke.chat.room as dke.chat.message records tagged with
-        message_source='promo', skipping any already imported
-        (matched by external_message_id).
+    def _absorb_channel_as_promo(channel, room, has_customer_reply=False):
+        """Copy messages from a secondary WhatsApp channel into an existing
+        dke.chat.room, skipping any already imported (by external_message_id).
 
-        This is called when a WA template blast creates a new discuss.channel
-        for a contact whose primary chat room already exists, instead of
-        overwriting the room's discuss_channel_id we fold those messages in.
+        For outbound-only channels (promo/followup blasts) all messages get
+        message_source='promo' and session_id=False.
+
+        For channels where the customer has replied (has_customer_reply=True),
+        outbound messages still get message_source='promo'/session_id=False,
+        but inbound customer messages get message_source='chat' and are linked
+        to the room's active session so a CS can respond.
+
+        In neither case is room.discuss_channel_id overwritten — this keeps
+        one stable room per customer regardless of how many Discuss channels
+        Odoo creates for promo blasts.
         """
         MailMsg = request.env['mail.message'].sudo()
         Msg = request.env['dke.chat.message'].sudo()
@@ -308,34 +314,55 @@ class ChatController(http.Controller):
             if m.external_message_id
         }
 
-        is_customer = channel.whatsapp_partner_id
+        is_customer_partner = channel.whatsapp_partner_id
+        # Get or create the active session only when we know there are customer replies
+        active_session = None
+        if has_customer_reply:
+            active_session = ChatController._ensure_active_session(room)
+
         to_create = []
         for mail_msg in channel_msgs:
             ext_id = 'discuss:%d' % mail_msg.id
             if ext_id in existing_ext_ids:
                 continue
-            is_customer_msg = is_customer and mail_msg.author_id == is_customer
-            sender_type = 'customer' if is_customer_msg else 'system'
+            is_customer_msg = is_customer_partner and mail_msg.author_id == is_customer_partner
             body = re.sub(r'<[^>]+>', '', mail_msg.body or '').strip()
-            to_create.append({
-                'room_id': room.id,
-                'session_id': False,
-                'external_message_id': ext_id,
-                'sender_type': sender_type,
-                'content_text': body,
-                'message_type': 'text',
-                'is_automated': True,
-                'is_read': True,
-                'send_status': 'sent',
-                'message_source': 'promo',
-                'created_at': mail_msg.create_date,
-            })
+            if is_customer_msg:
+                # Customer reply: link to active session, mark as regular chat
+                to_create.append({
+                    'room_id': room.id,
+                    'session_id': active_session.id if active_session else False,
+                    'external_message_id': ext_id,
+                    'sender_type': 'customer',
+                    'content_text': body,
+                    'message_type': 'text',
+                    'is_automated': False,
+                    'is_read': False,
+                    'send_status': 'sent',
+                    'message_source': 'chat',
+                    'created_at': mail_msg.create_date,
+                })
+            else:
+                # Outbound blast message: no session, tagged as promo
+                to_create.append({
+                    'room_id': room.id,
+                    'session_id': False,
+                    'external_message_id': ext_id,
+                    'sender_type': 'system',
+                    'content_text': body,
+                    'message_type': 'text',
+                    'is_automated': True,
+                    'is_read': True,
+                    'send_status': 'sent',
+                    'message_source': 'promo',
+                    'created_at': mail_msg.create_date,
+                })
 
         if to_create:
             Msg.create(to_create)
             _logger.info(
-                '_absorb_channel_as_promo: imported %d promo messages into room %s from channel %s',
-                len(to_create), room.id, channel.id,
+                '_absorb_channel_as_promo: imported %d messages into room %s from channel %s (has_customer_reply=%s)',
+                len(to_create), room.id, channel.id, has_customer_reply,
             )
 
     @staticmethod
@@ -448,15 +475,16 @@ class ChatController(http.Controller):
                         ('author_id', '=', ch.whatsapp_partner_id.id if ch.whatsapp_partner_id else False),
                     ], limit=1)
 
-                    if not customer_msg:
-                        # Outbound-only channel: absorb messages as promo records
-                        ChatController._absorb_channel_as_promo(ch, room)
-                        # Update last_message_time if this blast is more recent
-                        if last_msg and (not room.last_message_time or last_msg.create_date > room.last_message_time):
-                            room.write({'last_message_time': last_msg.create_date})
-                        new_ids.add(room.id)
-                        continue
-                    # Customer replied in this new channel → fall through to update discuss_channel_id
+                    has_customer_reply = bool(customer_msg)
+                    # Always absorb into existing room — never overwrite discuss_channel_id.
+                    # This keeps ONE stable room per customer regardless of how many
+                    # Discuss channels Odoo creates for promo/followup blasts.
+                    # If customer has replied, their messages are linked to the active session.
+                    ChatController._absorb_channel_as_promo(ch, room, has_customer_reply=has_customer_reply)
+                    if last_msg and (not room.last_message_time or last_msg.create_date > room.last_message_time):
+                        room.write({'last_message_time': last_msg.create_date})
+                    new_ids.add(room.id)
+                    continue
 
                 room.write({
                     'name': room.name or ch.name or ('WA: %s' % customer_name),
