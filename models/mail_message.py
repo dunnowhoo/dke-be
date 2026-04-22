@@ -30,7 +30,14 @@ class MailMessage(models.Model):
     def _notify_dke_chat_rooms(self, messages):
         """For each new mail.message on a WhatsApp discuss.channel that
         is linked to a dke.chat.room, push a bus.bus notification so
-        the frontend receives it instantly."""
+        the frontend receives it instantly.
+
+        When a customer replies for the first time after a promo blast, Odoo
+        native WA creates a NEW discuss.channel (ch2) while the room still
+        points to the old one (ch1).  We handle that by falling back to a
+        phone/partner lookup so we can update discuss_channel_id on-the-fly
+        and notify immediately — no need to wait for the next /api/chat/list poll.
+        """
         Room = self.env['dke.chat.room'].sudo()
         Channel = self.env['discuss.channel'].sudo()
 
@@ -45,14 +52,62 @@ class MailMessage(models.Model):
         if not channel_msg_map:
             return
 
-        # Find rooms linked to these channels
+        # Find rooms already linked to these channels
         rooms = Room.search([
             ('discuss_channel_id', 'in', list(channel_msg_map.keys())),
         ])
-        if not rooms:
-            return
-
         room_by_channel = {r.discuss_channel_id.id: r for r in rooms}
+
+        # For channels not yet linked to any room, try to match by phone/partner
+        # (e.g. customer replies on a new channel after a promo blast)
+        unlinked_channel_ids = set(channel_msg_map.keys()) - set(room_by_channel.keys())
+        for channel_id in unlinked_channel_ids:
+            channel = Channel.browse(channel_id)
+            if not channel.exists() or channel.channel_type != 'whatsapp':
+                continue
+            phone = channel.whatsapp_number or ''
+            partner = channel.whatsapp_partner_id
+
+            # Only process if there is actually a customer message on this channel
+            has_customer_msg = any(
+                m.author_id == partner
+                for msg_list in [channel_msg_map[channel_id]]
+                for m in msg_list
+                if partner
+            )
+            if not has_customer_msg:
+                continue
+
+            # Find room by phone or partner
+            domain = [('source', '=', 'whatsapp')]
+            if phone:
+                domain.append(('external_conversation_id', '=', phone))
+            elif partner:
+                domain.append(('customer_id', '=', partner.id))
+            else:
+                continue
+
+            room = Room.search(domain, limit=1)
+            if not room:
+                continue
+
+            # Update discuss_channel_id so messages endpoint reads from correct channel
+            update_vals = {
+                'discuss_channel_id': channel_id,
+                'state': 'active',
+            }
+            latest_msg = channel_msg_map[channel_id][-1]
+            if not room.last_message_time or latest_msg.create_date > room.last_message_time:
+                update_vals['last_message_time'] = latest_msg.create_date
+            room.write(update_vals)
+            room_by_channel[channel_id] = room
+            _logger.info(
+                'mail_message: updated discuss_channel_id on room %s → channel %s (customer reply)',
+                room.id, channel_id,
+            )
+
+        if not room_by_channel:
+            return
 
         for channel_id, msgs in channel_msg_map.items():
             room = room_by_channel.get(channel_id)

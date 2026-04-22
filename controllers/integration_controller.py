@@ -564,14 +564,16 @@ class IntegrationController(http.Controller):
         return request.make_response('OK', headers=[('Content-Type', 'text/plain')])
 
     def _process_single_message(self, msg, contacts):
-        """Parse one message object and persist to DB.
+        """Parse one incoming WhatsApp message and persist to dke.chat.room/dke.chat.message.
 
         EPIC02 - PBI-7 business rules:
         - Deduplicate by WhatsApp message_id.
         - Find or create res.partner by phone.
-        - Find or create dke.ticketing.room (per phone, source=whatsapp).
-        - Create dke.ticketing.message.
-        - Update dke.whatsapp.config.last_sync_time.
+        - Find or create dke.chat.room (source=whatsapp, per phone).
+        - If room has discuss_channel_id: update last_message_time only
+          (native WA already put the message in mail.message).
+        - If room has no discuss_channel_id: create dke.chat.message directly.
+        - Notify bus.bus + FE webhook so FE gets a real-time update.
         """
         wa_message_id = msg.get('id', '')
         phone = msg.get('from', '')
@@ -581,8 +583,8 @@ class IntegrationController(http.Controller):
         if not phone or not wa_message_id:
             return
 
-        # ── 1. Deduplicate ──────────────────────────────────────
-        already_exists = request.env['dke.ticketing.message'].sudo().search_count([
+        # ── 1. Deduplicate (check dke.chat.message) ─────────────
+        already_exists = request.env['dke.chat.message'].sudo().search_count([
             ('external_message_id', '=', wa_message_id)
         ])
         if already_exists:
@@ -605,11 +607,7 @@ class IntegrationController(http.Controller):
         else:
             content = f'[{msg_type}]'
 
-        # Normalise to dke.ticketing.message.message_type selection values
-        if msg_type not in ('text', 'image'):
-            stored_type = 'file'
-        else:
-            stored_type = msg_type
+        stored_type = msg_type if msg_type in ('text', 'image') else 'file'
 
         # ── 3. Resolve customer name from contacts array ────────
         customer_name = phone
@@ -628,13 +626,14 @@ class IntegrationController(http.Controller):
                 'phone': phone,
             })
 
-        # ── 5. Find or create dke.ticketing.room ────────────────────
-        ticketing_room = request.env['dke.ticketing.room'].sudo().search([
+        # ── 5. Find or create dke.chat.room ─────────────────────
+        Room = request.env['dke.chat.room'].sudo()
+        room = Room.search([
             ('external_conversation_id', '=', phone),
             ('source', '=', 'whatsapp'),
         ], limit=1)
-        if not ticketing_room:
-            ticketing_room = request.env['dke.ticketing.room'].sudo().create({
+        if not room:
+            room = Room.create({
                 'name': f'WA: {customer_name} ({phone})',
                 'customer_name': customer_name,
                 'customer_id': partner.id,
@@ -644,9 +643,18 @@ class IntegrationController(http.Controller):
                 'is_assigned': False,
             })
         else:
-            # Update name if it was previously just the phone number
-            if ticketing_room.customer_name == phone and customer_name != phone:
-                ticketing_room.sudo().write({'customer_name': customer_name})
+            updates = {}
+            if room.customer_name == phone and customer_name != phone:
+                updates['customer_name'] = customer_name
+            if room.state == 'done':
+                updates.update({
+                    'state': 'active',
+                    'is_assigned': False,
+                    'assigned_to': False,
+                    'assigned_at': False,
+                })
+            if updates:
+                room.write(updates)
 
         # ── 6. Parse timestamp ──────────────────────────────────
         try:
@@ -654,33 +662,63 @@ class IntegrationController(http.Controller):
         except (ValueError, TypeError):
             msg_time = fields.Datetime.now()
 
-        # ── 7. Create dke.ticketing.message ──────────────────────────
-        request.env['dke.ticketing.message'].sudo().create({
-            'room_id': ticketing_room.id,
-            'external_message_id': wa_message_id,
-            'sender_type': 'customer',
-            'content_text': content,
-            'message_type': stored_type,
-            'is_automated': False,
-            'created_at': msg_time,
-        })
+        # ── 7. Persist message ──────────────────────────────────
+        # If the room is linked to a discuss.channel, the Odoo native WA
+        # module will have already created the mail.message — don't duplicate.
+        msg_dict = None
+        if not room.discuss_channel_id:
+            new_msg = request.env['dke.chat.message'].sudo().create({
+                'room_id': room.id,
+                'external_message_id': wa_message_id,
+                'sender_type': 'customer',
+                'content_text': content,
+                'message_type': stored_type,
+                'is_automated': False,
+                'is_read': False,
+                'send_status': 'sent',
+                'message_source': 'chat',
+                'created_at': msg_time,
+            })
+            msg_dict = {
+                'id': new_msg.id,
+                'room_id': room.id,
+                'session_id': None,
+                'external_message_id': wa_message_id,
+                'sender_type': 'customer',
+                'sender_id': None,
+                'agent_name': customer_name,
+                'content_text': content,
+                'message_type': stored_type,
+                'attachment_url': '',
+                'attachment_filename': '',
+                'is_read': False,
+                'is_automated': False,
+                'send_status': 'sent',
+                'message_source': 'chat',
+                'created_at': msg_time.strftime('%Y-%m-%d %H:%M:%S'),
+            }
 
-        # ── 8. Update ticketing_room last_message_time ───────────────
-        ticketing_room.sudo().write({'last_message_time': msg_time})
+        # ── 8. Update room last_message_time ─────────────────────
+        room.write({'last_message_time': msg_time})
 
-        # ── 9. Post to Discuss (mail.thread) for Odoo inbox ────
+        # ── 9. Notify bus.bus + FE webhook ────────────────────────
         try:
-            chat_room.sudo().message_post(
-                body='[%s] %s' % (customer_name, content),
-                message_type='comment',
-                subtype_xmlid='mail.mt_comment',
+            request.env['bus.bus']._sendone(
+                'dke_chat_room_%s' % room.id,
+                'chat.new_message',
+                {'room_id': room.id, 'message': msg_dict},
+            )
+            request.env['bus.bus']._sendone(
+                'dke_chat_available',
+                'chat.new_message',
+                {'room_id': room.id},
             )
         except Exception:
-            _logger.warning('Failed to post WA message to Discuss for room %s', chat_room.id, exc_info=True)
+            _logger.debug('bus.bus notify failed for room %s', room.id, exc_info=True)
 
         _logger.info(
             "WhatsApp: saved message %s from %s (room=%s)",
-            wa_message_id, phone, ticketing_room.id,
+            wa_message_id, phone, room.id,
         )
 
     # ── Config Endpoints (bridged to Odoo whatsapp.account) ──────

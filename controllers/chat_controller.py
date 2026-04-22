@@ -487,6 +487,25 @@ class ChatController(http.Controller):
                             updates['last_message_time'] = last_msg.create_date
                         room.write(updates)
                         ChatController._ensure_active_session(room)
+                        # Notify FE so it re-fetches messages from the updated channel
+                        if last_msg:
+                            try:
+                                msg_dict = ChatController._discuss_msg_to_dict(last_msg, ch)
+                                request.env['bus.bus']._sendone(
+                                    'dke_chat_room_%s' % room.id,
+                                    'chat.new_message',
+                                    {'room_id': room.id, 'message': msg_dict},
+                                )
+                                request.env['bus.bus']._sendone(
+                                    'dke_chat_available',
+                                    'chat.new_message',
+                                    {'room_id': room.id},
+                                )
+                            except Exception:
+                                _logger.debug(
+                                    'bus notification failed after channel update for room %s',
+                                    room.id, exc_info=True,
+                                )
                     else:
                         # Promo/followup blast only — absorb outbound messages,
                         # keep existing discuss_channel_id stable.
