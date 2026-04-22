@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 
+import json
 import logging
+import threading
+
+import requests as _requests
 
 from odoo import models, api
 
@@ -75,8 +79,51 @@ class WhatsAppMessage(models.Model):
                     'is_read': is_read,
                 },
             )
+
+            # Mirror status update to FE webhook -> Redis SSE pipeline
+            # so Vercel clients also receive near real-time read/send updates.
+            self._push_status_webhook(room.id, mail_msg.id, send_status, is_read)
         except Exception:
             _logger.debug(
                 'Failed to push status_update for whatsapp.message %s', wa_msg.id,
                 exc_info=True,
             )
+
+    @api.model
+    def _push_status_webhook(self, room_id, message_id, send_status, is_read):
+        """Push a chat.status_update event to FE webhook (if configured)."""
+        ICP = self.env['ir.config_parameter'].sudo()
+        webhook_url = ICP.get_param('dke.chat.webhook_url', '')
+        if not webhook_url:
+            return
+
+        webhook_secret = ICP.get_param('dke.chat.webhook_secret', '')
+        headers = {'Content-Type': 'application/json'}
+        if webhook_secret:
+            headers['x-webhook-secret'] = webhook_secret
+
+        payload = {
+            'room_id': room_id,
+            'event': 'chat.status_update',
+            'message': {
+                'id': message_id,
+                'send_status': send_status,
+                'is_read': is_read,
+            },
+        }
+
+        def _post():
+            try:
+                _requests.post(
+                    webhook_url,
+                    data=json.dumps(payload),
+                    headers=headers,
+                    timeout=5,
+                )
+            except Exception:
+                _logger.debug(
+                    'FE status webhook call failed for room %s', room_id,
+                    exc_info=True,
+                )
+
+        threading.Thread(target=_post, daemon=True).start()

@@ -497,10 +497,42 @@ class ChatController(http.Controller):
                         ('res_id', '=', ch.id),
                         ('message_type', 'in', ('comment', 'whatsapp_message')),
                         ('author_id', '=', ch.whatsapp_partner_id.id if ch.whatsapp_partner_id else False),
-                    ], limit=1)
+                    ], order='create_date desc', limit=1)
 
                     has_customer_reply = bool(customer_msg)
                     if has_customer_reply:
+                        # Avoid flip-flop when multiple WA channels exist for the
+                        # same phone/contact: switch only if this candidate channel
+                        # has a newer customer reply than the currently linked one.
+                        current_ch = room.discuss_channel_id.sudo()
+                        current_customer_msg = False
+                        if current_ch and current_ch.whatsapp_partner_id:
+                            current_customer_msg = request.env['mail.message'].sudo().search([
+                                ('model', '=', 'discuss.channel'),
+                                ('res_id', '=', current_ch.id),
+                                ('message_type', 'in', ('comment', 'whatsapp_message')),
+                                ('author_id', '=', current_ch.whatsapp_partner_id.id),
+                            ], order='create_date desc', limit=1)
+
+                        candidate_customer_dt = customer_msg.create_date if customer_msg else False
+                        current_customer_dt = (
+                            current_customer_msg.create_date
+                            if current_customer_msg else False
+                        )
+
+                        if (
+                            current_customer_dt
+                            and candidate_customer_dt
+                            and candidate_customer_dt <= current_customer_dt
+                        ):
+                            _logger.debug(
+                                '_sync_whatsapp_channels: keep current channel %s for room %s; '
+                                'candidate %s has older/equal customer reply',
+                                current_ch.id, room.id, ch.id,
+                            )
+                            new_ids.add(room.id)
+                            continue
+
                         # Customer replied on a new channel → update discuss_channel_id so
                         # the messages endpoint reads from the correct (active) channel.
                         updates = {
@@ -936,8 +968,9 @@ class ChatController(http.Controller):
     def close_chat(self, room_id, **kwargs):
         """POST /api/chat/rooms/{room_id}/close — End chat session.
 
-        EPIC02 - PBI-22: Closes the active session and creates a survey
-        record. Room becomes 'done' and unassigned. If the customer
+        EPIC02 - PBI-22: Closes the active session, creates a survey
+        record, and auto-sends the survey link to the customer in the
+        chat. Room becomes 'done' and unassigned. If the customer
         messages again, a new session will be created automatically.
         """
         try:
@@ -954,6 +987,7 @@ class ChatController(http.Controller):
                 )
 
             current_uid = request.env.user.id
+            cs_name = request.env.user.name or 'Customer Care'
             assigned_uid = room.assigned_to.id if room.assigned_to else None
             if assigned_uid and assigned_uid != current_uid:
                 return request.make_json_response(
@@ -970,9 +1004,60 @@ class ChatController(http.Controller):
                 'partner_id': room.customer_id.id if room.customer_id else False,
             })
 
+            # ── Auto-send survey link message to customer ────────
+            survey_url = 'https://propenheimer.vercel.app/surveys/%s' % survey.token
+            survey_text = (
+                'Terima kasih telah menghubungi kami! 🙏\n'
+                'Mohon isi survey kepuasan berikut:\n%s'
+            ) % survey_url
+
+            now = fields.Datetime.now()
+
+            if room.discuss_channel_id:
+                # Send via WhatsApp discuss channel
+                from markupsafe import Markup
+                channel = room.discuss_channel_id.sudo()
+                try:
+                    mail_msg = channel.message_post(
+                        body=Markup('<p>%s</p>') % survey_text,
+                        message_type='whatsapp_message',
+                        subtype_xmlid='mail.mt_comment',
+                        author_id=request.env.user.partner_id.id,
+                    )
+                    survey_msg_dict = self._discuss_msg_to_dict(mail_msg, channel)
+                    survey_msg_dict['is_automated'] = True
+                    survey_msg_dict['message_source'] = 'chat'
+                except Exception:
+                    _logger.warning(
+                        'Failed to send survey link via WA for room %s', room_id,
+                        exc_info=True,
+                    )
+                    survey_msg_dict = None
+            else:
+                # Send via dke.chat.message
+                survey_msg = request.env['dke.chat.message'].sudo().create({
+                    'room_id': room_id,
+                    'session_id': active_session.id,
+                    'sender_type': 'system',
+                    'content_text': survey_text,
+                    'message_type': 'text',
+                    'is_automated': True,
+                    'is_read': True,
+                    'send_status': 'sent',
+                    'message_source': 'chat',
+                    'created_at': now,
+                })
+                survey_msg_dict = self._message_to_dict(survey_msg)
+
+            room.sudo().write({'last_message_time': now})
+
+            # Notify FE so survey link appears in real-time
+            if survey_msg_dict:
+                self._notify_new_message(room_id, survey_msg_dict)
+
             # Mark room as done and unassigned
             room.write({
-                'state': 'active',
+                'state': 'done',
                 'is_assigned': False,
                 'assigned_to': False,
                 'assigned_at': False,
@@ -980,7 +1065,7 @@ class ChatController(http.Controller):
 
             return request.make_json_response({
                 'status': 'success',
-                'message': 'Session chat berhasil ditutup.',
+                'message': 'Session chat berhasil ditutup. Link survey telah dikirim.',
                 'data': self._room_to_dict(room),
                 'session': {
                     'id': active_session.id,
@@ -1688,3 +1773,111 @@ class ChatController(http.Controller):
             return request.make_json_response(
                 {'status': 'error', 'message': str(e)}, status=500
             )
+
+    # ──────────────────────────────────────────────────────────────
+    # Public Survey Endpoints
+    # ──────────────────────────────────────────────────────────────
+
+    @http.route('/api/surveys/<string:token>', type='http', auth='public', methods=['GET', 'OPTIONS'], csrf=False, cors='*')
+    def get_survey(self, token, **kwargs):
+        """GET /api/surveys/{token} — Fetch survey details by token (public).
+
+        Returns survey info including the CS agent name who handled the
+        session, whether the survey has been submitted, and the rating
+        if already filled.
+        """
+        try:
+            survey = request.env['dke.customer.survey'].sudo().search([
+                ('token', '=', token),
+            ], limit=1)
+            if not survey:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Survey tidak ditemukan.'}, status=404
+                )
+
+            session = survey.session_id
+            cs_user = session.cs_user_id if session else None
+            cs_name = cs_user.name if cs_user else 'Customer Care'
+            is_submitted = bool(survey.submitted_at)
+
+            return request.make_json_response({
+                'status': 'success',
+                'data': {
+                    'token': survey.token,
+                    'cs_name': cs_name,
+                    'is_submitted': is_submitted,
+                    'rating': survey.rating if is_submitted else None,
+                    'review_text': survey.review_text if is_submitted else None,
+                    'submitted_at': self._fmt_dt(survey.submitted_at) if is_submitted else None,
+                },
+            })
+        except Exception as e:
+            _logger.error("get_survey error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
+    @http.route('/api/surveys/<string:token>/submit', type='http', auth='public', methods=['POST', 'OPTIONS'], csrf=False, cors='*')
+    def submit_survey(self, token, **kwargs):
+        """POST /api/surveys/{token}/submit — Submit customer survey (public).
+
+        Body (JSON): { "rating": 1-5, "review_text": "optional feedback" }
+        """
+        try:
+            survey = request.env['dke.customer.survey'].sudo().search([
+                ('token', '=', token),
+            ], limit=1)
+            if not survey:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Survey tidak ditemukan.'}, status=404
+                )
+
+            if survey.submitted_at:
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Survey sudah pernah diisi.'}, status=400
+                )
+
+            raw = request.httprequest.data
+            body = json.loads(raw) if raw else {}
+            rating = body.get('rating')
+            review_text = (body.get('review_text') or '').strip()
+
+            if not rating or str(rating) not in ('1', '2', '3', '4', '5'):
+                return request.make_json_response(
+                    {'status': 'error', 'message': 'Rating wajib diisi (1-5).'}, status=400
+                )
+
+            survey.write({
+                'rating': int(rating),
+                'review_text': review_text,
+                'submitted_at': fields.Datetime.now(),
+            })
+
+            # Also update room-level rating for analytics / performance
+            session = survey.session_id
+            if session and session.room_id:
+                room = session.room_id
+                room.sudo().write({
+                    'customer_care_rating': str(rating),
+                    'customer_care_feedback': review_text,
+                    'is_rated': True,
+                })
+                # Recompute CS performance stats
+                if room.assigned_to:
+                    room.assigned_to.sudo()._recompute_care_stats()
+
+            return request.make_json_response({
+                'status': 'success',
+                'message': 'Terima kasih atas penilaian Anda!',
+                'data': {
+                    'token': survey.token,
+                    'rating': int(rating),
+                    'review_text': review_text,
+                },
+            })
+        except Exception as e:
+            _logger.error("submit_survey error: %s", e, exc_info=True)
+            return request.make_json_response(
+                {'status': 'error', 'message': str(e)}, status=500
+            )
+
