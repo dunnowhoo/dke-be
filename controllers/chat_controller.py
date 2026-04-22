@@ -476,13 +476,23 @@ class ChatController(http.Controller):
                     ], limit=1)
 
                     has_customer_reply = bool(customer_msg)
-                    # Always absorb into existing room — never overwrite discuss_channel_id.
-                    # This keeps ONE stable room per customer regardless of how many
-                    # Discuss channels Odoo creates for promo/followup blasts.
-                    # If customer has replied, their messages are linked to the active session.
-                    ChatController._absorb_channel_as_promo(ch, room, has_customer_reply=has_customer_reply)
-                    if last_msg and (not room.last_message_time or last_msg.create_date > room.last_message_time):
-                        room.write({'last_message_time': last_msg.create_date})
+                    if has_customer_reply:
+                        # Customer replied on a new channel → update discuss_channel_id so
+                        # the messages endpoint reads from the correct (active) channel.
+                        updates = {
+                            'discuss_channel_id': ch.id,
+                            'state': 'active',
+                        }
+                        if last_msg and (not room.last_message_time or last_msg.create_date > room.last_message_time):
+                            updates['last_message_time'] = last_msg.create_date
+                        room.write(updates)
+                        ChatController._ensure_active_session(room)
+                    else:
+                        # Promo/followup blast only — absorb outbound messages,
+                        # keep existing discuss_channel_id stable.
+                        ChatController._absorb_channel_as_promo(ch, room, has_customer_reply=False)
+                        if last_msg and (not room.last_message_time or last_msg.create_date > room.last_message_time):
+                            room.write({'last_message_time': last_msg.create_date})
                     new_ids.add(room.id)
                     continue
 
