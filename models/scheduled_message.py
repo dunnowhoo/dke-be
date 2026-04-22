@@ -106,7 +106,7 @@ class ScheduledMessage(models.Model):
                     continue
 
                 # Try to send via WhatsApp template
-                wa_sent = self._send_via_whatsapp_template(msg, room)
+                wa_sent, wa_err = self._send_via_whatsapp_template(msg, room)
 
                 # Create chat message in history.
                 # ALWAYS use dke.chat.message — NEVER channel.message_post.
@@ -139,7 +139,7 @@ class ScheduledMessage(models.Model):
                 msg.write({
                     'state': new_state,
                     'sent_at': now,
-                    'error_message': False if wa_sent else 'WhatsApp API send failed — no active account, phone, or template',
+                    'error_message': False if wa_sent else (wa_err or 'WhatsApp API send failed'),
                 })
 
                 # Update the FollowUpLog for this message so the logs endpoint
@@ -174,16 +174,8 @@ class ScheduledMessage(models.Model):
     def _send_via_whatsapp_template(self, msg, room):
         """Send message via Odoo WhatsApp template (whatsapp module).
 
-        Uses the native whatsapp.message flow:
-        1. Resolve the WhatsApp template (from followup_rule or fallback)
-        2. Create a mail.message record (required by whatsapp.message)
-        3. Create a whatsapp.message record in 'outgoing' state
-        4. Call _send() which routes to the WhatsApp Cloud API
-
-        Supports text, image, video, document headers — whatever the
-        approved template defines.
-
-        Returns True if the message was queued/sent, False otherwise.
+        Returns (True, '') on success or (False, '<reason>') on failure so
+        callers can surface the exact failure in the API response / log.
         """
         try:
             # --- 1. Resolve WhatsApp account ---
@@ -191,7 +183,7 @@ class ScheduledMessage(models.Model):
             account = WaAccount.search([('active', '=', True)], limit=1)
             if not account:
                 _logger.warning('No active WhatsApp account configured')
-                return False
+                return False, 'No active WhatsApp account configured'
 
             # --- 2. Resolve phone number ---
             phone = getattr(room, 'external_conversation_id', '') or ''
@@ -201,7 +193,7 @@ class ScheduledMessage(models.Model):
                     phone = customer.mobile or customer.phone or ''
             if not phone:
                 _logger.warning('No phone number for room %s', room.name)
-                return False
+                return False, 'No phone number for room %s' % room.name
 
             # Normalize to international format (+countrycode) so Odoo's
             # mobile_number_formatted computed field can parse it reliably.
@@ -235,22 +227,50 @@ class ScheduledMessage(models.Model):
                 ], limit=1)
             if not wa_template:
                 _logger.warning('No approved WhatsApp template found for account %s', account.name)
-                return False
+                return False, 'No approved WhatsApp template found for account %s' % account.name
 
             # --- 4. Build mail.message for tracking ---
+            # CRITICAL: mail_message_id.model MUST equal wa_template.model.
+            # Odoo's whatsapp.message._send_message() enforces:
+            #   if mail_msg.model != wa_template.model → WhatsAppError(failure_type='template')
+            # wa_template.model has default='res.partner' (required field), so for all
+            # templates we create this is always 'res.partner'. Mirror it here exactly.
             customer_partner = msg.customer_id or getattr(room, 'customer_id', None)
+            template_model = wa_template.model or 'res.partner'
+
+            # Ensure template has model_id set (guard for templates imported without it).
+            if not wa_template.model_id:
+                IrModel = self.env['ir.model'].sudo()
+                partner_model = IrModel.search([('model', '=', 'res.partner')], limit=1)
+                if partner_model:
+                    wa_template.sudo().write({'model_id': partner_model.id})
+                    wa_template.invalidate_recordset(['model'])
+                    template_model = 'res.partner'
+
+            # Resolve res_id for the template model.
+            mail_res_id = 0
+            if template_model == 'res.partner' and customer_partner:
+                mail_res_id = customer_partner.id
+
             mail_vals = {
-                'model': 'res.partner',
-                'res_id': customer_partner.id if customer_partner else 0,
+                'model': template_model,
+                'res_id': mail_res_id,
                 'body': msg.message or '',
                 'message_type': 'whatsapp_message',
                 'subtype_id': self.env.ref('mail.mt_note').id,
             }
-            # Link the customer partner so Odoo can detect their country
-            # for phone number formatting in mobile_number_formatted.
+            # Link the customer partner so Odoo can detect their country for
+            # phone number formatting in mobile_number_formatted (computed field).
             if customer_partner:
                 mail_vals['partner_ids'] = [Command.link(customer_partner.id)]
             mail_msg = self.env['mail.message'].sudo().create(mail_vals)
+
+            # Flush the ORM write queue so the M2M partner_ids relation is
+            # persisted to DB BEFORE whatsapp.message is created. The
+            # _compute_mobile_number_formatted computed field on whatsapp.message
+            # reads mail_message_id.partner_ids[0].country_id for phone validation;
+            # without a flush the partner link may not yet be visible.
+            self.env.cr.flush()
 
             # --- 5. Build free_text_json from variable_values ---
             import json as _json
@@ -285,20 +305,21 @@ class ScheduledMessage(models.Model):
 
             # Check actual send result — _send() doesn't raise on error,
             # it writes state='error' on the whatsapp.message record.
-            wa_msg.invalidate_recordset(['state', 'failure_reason'])
+            wa_msg.invalidate_recordset(['state', 'failure_type', 'failure_reason'])
             if wa_msg.state == 'error':
+                reason = '%s: %s' % (wa_msg.failure_type or 'unknown', wa_msg.failure_reason or '(none)')
                 _logger.warning(
                     'WhatsApp Cloud API rejected message for room %s: %s',
-                    room.name, wa_msg.failure_reason or 'unknown',
+                    room.name, reason,
                 )
-                return False
+                return False, reason
 
             _logger.info(
                 'WhatsApp template "%s" sent for room %s (phone: %s)',
                 wa_template.template_name, room.name, phone,
             )
-            return True
+            return True, ''
 
         except Exception as e:
             _logger.warning('WhatsApp send failed for room %s: %s', room.name, e)
-            return False
+            return False, str(e)
