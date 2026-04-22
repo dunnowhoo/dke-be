@@ -23,15 +23,19 @@ def _sync_template_variables(template):
     Odoo's button_submit_template() needs variable_ids populated to build a
     valid WhatsApp API payload. Without these records the API call is malformed
     and returns "query was malformed".
+
+    Also ensures existing variables have field_type='free_text' and a non-empty
+    demo_value — required by the _check_demo_values constraint and Meta API.
     """
     WaVar = template.env['whatsapp.template.variable'].sudo()
-    existing = set((v.name, v.line_type) for v in template.variable_ids)
+    existing = {(v.name, v.line_type): v for v in template.variable_ids}
 
     to_create = []
 
     # Body variables — {{1}}, {{2}}, …
     for var_name in sorted(set(re.findall(r'\{\{\d+\}\}', template.body or ''))):
-        if (var_name, 'body') not in existing:
+        key = (var_name, 'body')
+        if key not in existing:
             to_create.append({
                 'wa_template_id': template.id,
                 'name': var_name,
@@ -39,11 +43,22 @@ def _sync_template_variables(template):
                 'field_type': 'free_text',
                 'demo_value': 'Contoh Nilai',
             })
+        else:
+            # Ensure existing variable has correct field_type and non-empty demo_value
+            var = existing[key]
+            update = {}
+            if var.field_type != 'free_text':
+                update['field_type'] = 'free_text'
+            if not var.demo_value:
+                update['demo_value'] = 'Contoh Nilai'
+            if update:
+                var.write(update)
 
     # Header text variables
     if template.header_type == 'text':
         for var_name in sorted(set(re.findall(r'\{\{\d+\}\}', template.header_text or ''))):
-            if (var_name, 'header') not in existing:
+            key = (var_name, 'header')
+            if key not in existing:
                 to_create.append({
                     'wa_template_id': template.id,
                     'name': var_name,
@@ -51,6 +66,15 @@ def _sync_template_variables(template):
                     'field_type': 'free_text',
                     'demo_value': 'Contoh Nilai',
                 })
+            else:
+                var = existing[key]
+                update = {}
+                if var.field_type != 'free_text':
+                    update['field_type'] = 'free_text'
+                if not var.demo_value:
+                    update['demo_value'] = 'Contoh Nilai'
+                if update:
+                    var.write(update)
 
     if to_create:
         WaVar.create(to_create)
@@ -403,8 +427,13 @@ class WaTemplateController(http.Controller):
         try:
             template.button_submit_template()
         except Exception as e:
-            _logger.error('WA template submit failed: %s', e, exc_info=True)
-            return _error(500, 'Gagal submit template: %s' % str(e))
+            error_detail = str(e)
+            _logger.error(
+                'WA template submit FAILED for template_id=%d name=%s template_name=%s: %s',
+                template_id, template.name, template.template_name, error_detail,
+                exc_info=True,
+            )
+            return _error(500, 'Gagal submit template: %s' % error_detail)
 
         template.invalidate_recordset()
         return {
@@ -616,6 +645,30 @@ class WaTemplateController(http.Controller):
         if not valid_partners:
             return _error(400, 'Tidak ada kontak valid.')
 
+        # Deduplicate valid_partners by normalised phone number so a bulk send
+        # never delivers two messages to the same WhatsApp number just because
+        # there are two res.partner records for the same physical person.
+        # Key: last 9 digits of the digit-only phone (same logic as list_contacts).
+        def _norm_phone_key(partner):
+            raw = (partner.mobile or partner.phone or '').strip()
+            digits = ''.join(c for c in raw if c.isdigit())
+            return digits[-9:] if len(digits) >= 9 else digits
+
+        _seen_phone_keys: set = set()
+        _deduped_partners = []
+        for _p in valid_partners:
+            _key = _norm_phone_key(_p)
+            if _key and _key in _seen_phone_keys:
+                _logger.info(
+                    'send_template: skipping partner %s (phone %s) — duplicate of already-queued number',
+                    _p.id, _p.mobile or _p.phone,
+                )
+                continue
+            _deduped_partners.append(_p)
+            if _key:
+                _seen_phone_keys.add(_key)
+        valid_partners = _deduped_partners
+
         # Build body with variable substitution
         wa_body = template.body or template.name or ''
         if variable_values and isinstance(variable_values, dict):
@@ -716,6 +769,7 @@ class WaTemplateController(http.Controller):
                             'message_type': 'text',
                             'is_automated': True,
                             'send_status': 'sent' if wa_sent else 'failed',
+                            'message_source': 'followup',
                             'created_at': now,
                         })
 
