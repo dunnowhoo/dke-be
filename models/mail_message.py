@@ -8,6 +8,7 @@ import threading
 import requests as _requests
 
 from odoo import models, api
+from odoo.fields import Command
 
 _logger = logging.getLogger(__name__)
 
@@ -100,6 +101,21 @@ class MailMessage(models.Model):
             if not room.last_message_time or latest_msg.create_date > room.last_message_time:
                 update_vals['last_message_time'] = latest_msg.create_date
             room.write(update_vals)
+            # Ensure admin partner can see the new/updated channel in Discuss.
+            # Odoo native WA uses Command.clear() when setting channel_member_ids,
+            # wiping admin's membership. Re-add it here after switching channels.
+            try:
+                channel_obj = self.env['discuss.channel'].sudo().browse(channel_id)
+                admin_partner = self.env.ref('base.partner_admin').sudo()
+                already = channel_obj.channel_member_ids.filtered(
+                    lambda m: m.partner_id == admin_partner
+                )
+                if not already:
+                    channel_obj.write({
+                        'channel_member_ids': [Command.create({'partner_id': admin_partner.id})],
+                    })
+            except Exception:
+                _logger.debug('ensure_admin_member failed for channel %s', channel_id, exc_info=True)
             room_by_channel[channel_id] = room
             _logger.info(
                 'mail_message: updated discuss_channel_id on room %s → channel %s (customer reply)',

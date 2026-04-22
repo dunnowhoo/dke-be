@@ -247,6 +247,29 @@ class ChatController(http.Controller):
         }
 
     @staticmethod
+    def _ensure_admin_member(channel):
+        """Ensure the Odoo Administrator partner is a member of the discuss.channel.
+
+        Odoo native WA uses Command.clear() when setting channel_member_ids,
+        which wipes previous members and adds only notify_user_ids + customer.
+        This means the admin user loses visibility of the channel in Discuss.
+        We always re-add them so every WA channel is visible from the admin account.
+        """
+        try:
+            admin_partner = request.env.ref('base.partner_admin').sudo()
+            already = channel.channel_member_ids.filtered(
+                lambda m: m.partner_id == admin_partner
+            )
+            if not already:
+                channel.sudo().write({
+                    'channel_member_ids': [Command.create({'partner_id': admin_partner.id})],
+                })
+        except Exception:
+            _logger.debug(
+                '_ensure_admin_member failed for channel %s', channel.id, exc_info=True
+            )
+
+    @staticmethod
     def _ensure_active_session(room):
         """Ensure room has exactly one active chat session available.
 
@@ -392,6 +415,7 @@ class ChatController(http.Controller):
             if ch.id in linked_ids:
                 room = existing.filtered(lambda r: r.discuss_channel_id.id == ch.id)[:1]
                 if room:
+                    ChatController._ensure_admin_member(ch)
                     ChatController._ensure_active_session(room)
                 # Refresh last_message_time from the channel's latest message
                 last_msg = request.env['mail.message'].sudo().search(
@@ -486,6 +510,7 @@ class ChatController(http.Controller):
                         if last_msg and (not room.last_message_time or last_msg.create_date > room.last_message_time):
                             updates['last_message_time'] = last_msg.create_date
                         room.write(updates)
+                        ChatController._ensure_admin_member(ch)
                         ChatController._ensure_active_session(room)
                         # Notify FE so it re-fetches messages from the updated channel
                         if last_msg:
@@ -524,6 +549,7 @@ class ChatController(http.Controller):
                     'last_message_time': last_msg.create_date if last_msg else (room.last_message_time or ch.create_date),
                     'state': 'active',
                 })
+                ChatController._ensure_admin_member(ch)
             else:
                 room = Room.create({
                     'name': ch.name or ('WA: %s' % customer_name),
@@ -536,6 +562,7 @@ class ChatController(http.Controller):
                     'discuss_channel_id': ch.id,
                     'last_message_time': last_msg.create_date if last_msg else ch.create_date,
                 })
+                ChatController._ensure_admin_member(ch)
             ChatController._ensure_active_session(room)
             new_ids.add(room.id)
 
